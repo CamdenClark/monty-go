@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -217,39 +215,6 @@ func TestCheckoutHonorsCanceledContext(t *testing.T) {
 	healthy := integrationSession(t, pool)
 	if got := run(t, healthy, "6 * 7"); got != int64(42) {
 		t.Fatalf("got %#v", got)
-	}
-}
-
-func TestMountOverlayCreatedFileDoesNotPersist(t *testing.T) {
-	host := t.TempDir()
-	mount, err := monty.NewMountDir(monty.MountOptions{HostPath: host, VirtualPath: "/data"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mount.Close() })
-	session := integrationSession(t, integrationPool(t))
-	code := "from pathlib import Path\np=Path('/data/new.txt')\np.write_text('temporary')\n(p.exists(), p.read_text())"
-	want := monty.Tuple{true, "temporary"}
-	if got := run(t, session, code, monty.FeedOptions{Mount: mount}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v", got)
-	}
-	if _, err = os.Stat(host + "/new.txt"); !os.IsNotExist(err) {
-		t.Fatalf("overlay file persisted: %v", err)
-	}
-}
-
-func TestMountTraversalFallsThroughToDefaultDenial(t *testing.T) {
-	host := t.TempDir()
-	mount, err := monty.NewMountDir(monty.MountOptions{HostPath: host, VirtualPath: "/data", Mode: monty.MountReadOnly})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mount.Close() })
-	session := integrationSession(t, integrationPool(t))
-	_, err = session.FeedRun(context.Background(), "open('/data/../secret.txt').read()", monty.FeedOptions{Mount: mount})
-	var runtimeErr *monty.RuntimeError
-	if !errors.As(err, &runtimeErr) || runtimeErr.Exception.Type != "PermissionError" {
-		t.Fatalf("got %T %v", err, err)
 	}
 }
 

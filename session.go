@@ -31,8 +31,6 @@ type PrintCallback func(PrintStream, string) error
 type FeedOptions struct {
 	Inputs         map[string]Value
 	ExternalLookup ExternalLookup
-	Mount          *MountDir
-	Mounts         []*MountDir
 	OS             OSHandler
 	PrintCallback  PrintCallback
 	SkipTypeCheck  bool
@@ -129,8 +127,12 @@ type runState struct {
 	options FeedOptions
 	futures map[uint32]<-chan futureOutcome
 	step    uint64
-	mounts  []*mountState
 }
+
+func newRunState(session *Session, options FeedOptions) *runState {
+	return &runState{session: session, options: options, futures: make(map[uint32]<-chan futureOutcome)}
+}
+
 type futureOutcome struct {
 	value Value
 	err   error
@@ -395,15 +397,6 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		return nil, err
 	}
 	if s.IsOSFunction {
-		for _, mount := range s.state.mounts {
-			value, handled, err := mount.handle(s.FunctionName, s.Args)
-			if err != nil {
-				return s.resumeError(ctx, err)
-			}
-			if handled {
-				return s.resume(ctx, resumeResult{value: value})
-			}
-		}
 		handler := s.state.options.OS
 		if handler == nil {
 			return s.resume(ctx, resumeResult{notHandled: true})

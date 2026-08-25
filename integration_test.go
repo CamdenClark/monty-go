@@ -285,52 +285,17 @@ func TestIntegrationOSCallbacks(t *testing.T) {
 	}
 }
 
-func TestIntegrationDirectoryMountModes(t *testing.T) {
-	host := t.TempDir()
-	if err := os.WriteFile(host+"/message.txt", []byte("from host"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	overlay, err := monty.NewMountDir(monty.MountOptions{HostPath: host, VirtualPath: "/data"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = overlay.Close() })
-	pool := integrationPool(t)
-	session := integrationSession(t, pool)
-	if got := run(t, session, "open('/data/message.txt').read()", monty.FeedOptions{Mount: overlay}); got != "from host" {
-		t.Fatalf("got %#v", got)
-	}
-	meta := run(t, session, "from pathlib import Path\np = Path('/data/message.txt')\n(p.stat().st_size, [x.name for x in Path('/data').iterdir()])", monty.FeedOptions{Mount: overlay})
-	if want := (monty.Tuple{int64(9), monty.List{"message.txt"}}); !reflect.DeepEqual(meta, want) {
-		t.Fatalf("metadata got %#v", meta)
-	}
-	code := "from pathlib import Path\np = Path('/data/message.txt')\np.write_text('overlay')\np.read_text()"
-	if got := run(t, session, code, monty.FeedOptions{Mount: overlay}); got != "overlay" {
-		t.Fatalf("got %#v", got)
-	}
-	if got := run(t, session, "open('/data/message.txt').read()", monty.FeedOptions{Mount: overlay}); got != "from host" {
-		t.Fatalf("overlay leaked: %#v", got)
-	}
-	readOnly, err := monty.NewMountDir(monty.MountOptions{HostPath: host, VirtualPath: "/ro", Mode: monty.MountReadOnly})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = readOnly.Close() })
-	_, err = session.FeedRun(context.Background(), "from pathlib import Path\nPath('/ro/message.txt').write_text('no')", monty.FeedOptions{Mount: readOnly})
-	var runtimeErr *monty.RuntimeError
-	if !errors.As(err, &runtimeErr) || runtimeErr.Exception.Type != "PermissionError" {
-		t.Fatalf("got %T %v", err, err)
-	}
-	readWrite, err := monty.NewMountDir(monty.MountOptions{HostPath: host, VirtualPath: "/rw", Mode: monty.MountReadWrite})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = readWrite.Close() })
-	if got := run(t, session, "from pathlib import Path\np=Path('/rw/output.txt')\np.write_text('a')\nopen('/rw/output.txt', 'a').write('b')\np.read_text()", monty.FeedOptions{Mount: readWrite}); got != "ab" {
-		t.Fatalf("append got %#v", got)
-	}
-	if data, err := os.ReadFile(host + "/output.txt"); err != nil || string(data) != "ab" {
-		t.Fatalf("host persisted %q, %v", data, err)
+func TestIntegrationFilesystemDeniedWithoutOSHandler(t *testing.T) {
+	session := integrationSession(t, integrationPool(t))
+	for _, code := range []string{
+		"open('/etc/passwd').read()",
+		"from pathlib import Path\nPath('/etc/passwd').read_text()",
+	} {
+		_, err := session.FeedRun(context.Background(), code)
+		var runtimeErr *monty.RuntimeError
+		if !errors.As(err, &runtimeErr) || runtimeErr.Exception.Type != "PermissionError" {
+			t.Fatalf("default filesystem access got %T %v", err, err)
+		}
 	}
 }
 
