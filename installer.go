@@ -24,9 +24,10 @@ const RuntimeVersion = "0.0.21"
 const CacheDirEnv = "MONTY_CACHE_DIR"
 
 const (
-	maxRuntimeArchiveSize = 64 << 20
-	maxRuntimeBinarySize  = 64 << 20
-	installLockStaleAfter = 5 * time.Minute
+	maxRuntimeArchiveSize  = 64 << 20
+	maxRuntimeUnpackedSize = 128 << 20
+	maxRuntimeBinarySize   = 64 << 20
+	installLockStaleAfter  = 5 * time.Minute
 )
 
 // InstallOptions configures installation of the Monty worker for the current
@@ -317,12 +318,17 @@ func extractRuntimeArchive(archivePath, target string, artifact runtimeArtifact)
 		return fmt.Errorf("open Monty runtime archive: %w", err)
 	}
 	defer archive.Close()
+	return extractRuntimeArchiveReader(archive, target, artifact)
+}
+
+func extractRuntimeArchiveReader(archive io.Reader, target string, artifact runtimeArtifact) error {
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
 		return fmt.Errorf("decompress Monty runtime archive: %w", err)
 	}
 	defer gzipReader.Close()
-	tarReader := tar.NewReader(gzipReader)
+	unpacked := &io.LimitedReader{R: gzipReader, N: maxRuntimeUnpackedSize + 1}
+	tarReader := tar.NewReader(unpacked)
 	for {
 		header, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
