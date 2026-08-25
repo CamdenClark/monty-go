@@ -7,8 +7,6 @@ on:
 jobs:
   go-test:
     runs-on: ubuntu-latest
-    env:
-      MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,10 +15,15 @@ jobs:
       - name: Test automatic runtime installation
         env:
           MONTY_AUTO_INSTALL_TEST: '1'
+          MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
         run: go test -run '^TestIntegrationAutoInstall$' .
       - name: Test installer command reuse
+        env:
+          MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
         run: go run ./cmd/monty-install
       - name: Test
+        env:
+          MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
         run: go test -race ./...
       - name: Vet
         run: go vet ./...
