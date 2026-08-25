@@ -2,7 +2,33 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library requires Go 1.25+ and a `monty` executable. Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, `PATH`, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory.
+The library requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+
+## Runtime installation
+
+Install the runtime explicitly during development, CI, or container construction:
+
+```bash
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.2.0
+```
+
+Applications can perform the same idempotent installation themselves:
+
+```go
+path, err := monty.Install(ctx)
+```
+
+The installer downloads the official Pydantic platform archive directly over HTTPS, verifies pinned SHA-256 digests for both the archive and extracted executable, and stores it in a versioned directory under `os.UserCacheDir()`. Concurrent installers coordinate through a lock and publish the executable only after complete verification. Subsequent calls use the verified cached runtime without network access.
+
+Set `MONTY_CACHE_DIR` or pass `monty.InstallOptions{CacheDir: ...}` to choose another cache. For development tools that may download on first use, opt in through the pool:
+
+```go
+pool, err := monty.New(ctx, monty.Options{AutoInstall: true})
+```
+
+Production and air-gapped deployments should run the installer while building the image, preserve the resulting cache directory, or provide a preinstalled worker through `Options.BinaryPath` or `MONTY_BIN`.
+
+Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, `PATH`, the versioned runtime cache, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory. The supported installer targets are macOS ARM64/x64, Linux ARM64/x64 using glibc, and Windows x64.
 
 ## Basic usage
 
@@ -19,6 +45,8 @@ import (
 
 func main() {
     ctx := context.Background()
+    if _, err := monty.Install(ctx); err != nil { log.Fatal(err) }
+
     pool, err := monty.New(ctx)
     if err != nil { log.Fatal(err) }
     defer pool.Close()
@@ -111,12 +139,13 @@ Mounts cover file reads/writes, `open`, metadata checks, `stat`, `iterdir`, mkdi
 
 ## Testing
 
-Unit tests always run. Integration tests run real Monty programs when a binary resolves, and otherwise skip:
+Unit tests always run. Integration tests run real Monty programs when a binary resolves, and otherwise skip. To provision the pinned runtime and run everything:
 
 ```bash
-MONTY_BIN=/path/to/monty go test -race ./...
+go run ./cmd/monty-install
+go test -race ./...
 ```
 
-The suite currently contains **60 named tests** (plus table-driven subtests). Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite currently contains **76 named tests** (plus table-driven subtests). Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
 
-The remaining tests cover all boundary value families, native Go object conversion, sync and async host functions, kwargs, host exceptions and panics, lazy lookup, output collectors, errors and recovery, OS callbacks, mount modes and traversal denial, every snapshot variant, idle/suspended dumps, branched restores, pool capacity and recycling, cancellation, hard timeouts, type checking formats, assertion annotations, and resource limits.
+The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; mount modes and traversal denial; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.

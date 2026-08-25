@@ -16,11 +16,16 @@ import (
 )
 
 // Version is the version of this Go wrapper.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Options configures a Monty worker pool.
 type Options struct {
-	BinaryPath      string
+	BinaryPath string
+	// CacheDir overrides MONTY_CACHE_DIR and the operating system's user cache
+	// when resolving or automatically installing a Monty runtime.
+	CacheDir string
+	// AutoInstall downloads the pinned runtime when no existing binary resolves.
+	AutoInstall     bool
 	MinProcesses    int
 	MaxProcesses    int
 	CheckoutTimeout time.Duration
@@ -133,7 +138,10 @@ func New(ctx context.Context, options ...Options) (*Monty, error) {
 	if o.DurationLimitGrace < 0 {
 		return nil, fmt.Errorf("DurationLimitGrace cannot be negative")
 	}
-	binary, err := FindBinary(o.BinaryPath)
+	binary, err := findBinary(o.BinaryPath, o.CacheDir)
+	if err != nil && o.AutoInstall && o.BinaryPath == "" {
+		binary, err = Install(ctx, InstallOptions{CacheDir: o.CacheDir})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -156,9 +164,14 @@ func New(ctx context.Context, options ...Options) (*Monty, error) {
 // Create is an alias for New, matching the TypeScript wrapper's factory name.
 func Create(ctx context.Context, options ...Options) (*Monty, error) { return New(ctx, options...) }
 
-// FindBinary resolves a Monty executable: explicit path, MONTY_BIN, PATH,
-// an installed npm platform package, then a nearby Cargo target directory.
+// FindBinary resolves a Monty executable: explicit path, MONTY_BIN, PATH, the
+// versioned runtime cache, an installed npm platform package, then a nearby
+// Cargo target directory.
 func FindBinary(explicit string) (string, error) {
+	return findBinary(explicit, "")
+}
+
+func findBinary(explicit, cacheDir string) (string, error) {
 	if explicit != "" {
 		return executableFile(explicit, "BinaryPath")
 	}
@@ -169,6 +182,14 @@ func FindBinary(explicit string) (string, error) {
 	}
 	if p, e := exec.LookPath("monty"); e == nil {
 		return p, nil
+	}
+	var cacheErr error
+	if artifact, e := currentRuntimeArtifact(); e == nil {
+		if p, e := cachedRuntimeBinary(cacheDir, artifact); e == nil {
+			return p, nil
+		} else {
+			cacheErr = e
+		}
 	}
 	triple := ""
 	switch runtime.GOOS + "/" + runtime.GOARCH {
@@ -207,7 +228,11 @@ func FindBinary(explicit string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("could not locate the monty binary (pass BinaryPath, set MONTY_BIN, install it on PATH, or install @pydantic/monty)")
+	message := "could not locate the monty binary (call monty.Install, enable Options.AutoInstall, pass BinaryPath, or set MONTY_BIN)"
+	if cacheErr != nil && !errors.Is(cacheErr, os.ErrNotExist) {
+		return "", fmt.Errorf("%s: %w", message, cacheErr)
+	}
+	return "", errors.New(message)
 }
 func executableFile(path, source string) (string, error) {
 	info, err := os.Stat(path)

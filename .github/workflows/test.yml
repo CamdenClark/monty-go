@@ -7,19 +7,20 @@ on:
 jobs:
   go-test:
     runs-on: ubuntu-latest
+    env:
+      MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install Monty worker
-        run: npm install --no-save @pydantic/monty-linux-x64-gnu@0.0.21
-      - name: Test
+      - name: Test automatic runtime installation
         env:
-          MONTY_BIN: ${{ github.workspace }}/node_modules/@pydantic/monty-linux-x64-gnu/monty
+          MONTY_AUTO_INSTALL_TEST: '1'
+        run: go test -run '^TestIntegrationAutoInstall$' .
+      - name: Test installer command reuse
+        run: go run ./cmd/monty-install
+      - name: Test
         run: go test -race ./...
       - name: Vet
         run: go vet ./...
