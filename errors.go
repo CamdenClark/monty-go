@@ -82,6 +82,7 @@ type CrashedError struct {
 	Message    string
 	TimedOut   bool
 	ExitStatus string
+	cause      error
 }
 
 func (e *CrashedError) Error() string {
@@ -90,7 +91,10 @@ func (e *CrashedError) Error() string {
 	}
 	return "Monty worker crashed"
 }
-func (*CrashedError) MontyError() {}
+
+// Unwrap returns the worker failure, cancellation, or deadline cause, if any.
+func (e *CrashedError) Unwrap() error { return e.cause }
+func (*CrashedError) MontyError()     {}
 
 // ProtocolError indicates an invalid protocol exchange. The session is lost.
 type ProtocolError struct{ Message string }

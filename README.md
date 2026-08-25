@@ -99,6 +99,13 @@ _ = restored
 
 Use `Session.Dump` and `LoadSession` between feeds to persist an idle REPL.
 
+Dumps contain Monty's VM state only. They do not serialize host-side
+`FeedOptions` state such as overlay mount contents, callback implementations,
+or the Go goroutines and channels behind in-flight asynchronous functions.
+Supply fresh `FeedOptions` when loading a suspended snapshot. A restored
+`FutureSnapshot` whose original Go work is no longer available must be resolved
+manually with `FutureSnapshot.Resume`.
+
 ## Output, errors, limits, and type checking
 
 `FeedOptions.PrintCallback` receives line-buffered stdout/stderr. `NewCollectString` and `NewCollectStreams` provide capped host collectors.
@@ -146,6 +153,6 @@ go run ./cmd/monty-install
 go test -race ./...
 ```
 
-The suite currently contains **76 named tests** (plus table-driven subtests). Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite currently contains **78 named tests** (plus table-driven subtests). Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; mount modes and traversal denial; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.

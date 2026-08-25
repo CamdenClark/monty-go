@@ -103,6 +103,7 @@ type Monty struct {
 	binary  string
 	idle    chan *worker
 	slots   chan struct{}
+	done    chan struct{}
 	mu      sync.Mutex
 	closed  bool
 	workers map[*worker]struct{}
@@ -145,7 +146,14 @@ func New(ctx context.Context, options ...Options) (*Monty, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Monty{options: o, binary: binary, idle: make(chan *worker, o.MaxProcesses), slots: make(chan struct{}, o.MaxProcesses), workers: make(map[*worker]struct{})}
+	p := &Monty{
+		options: o,
+		binary:  binary,
+		idle:    make(chan *worker, o.MaxProcesses),
+		slots:   make(chan struct{}, o.MaxProcesses),
+		done:    make(chan struct{}),
+		workers: make(map[*worker]struct{}),
+	}
 	for range o.MinProcesses {
 		if err := ctx.Err(); err != nil {
 			_ = p.Close()
@@ -288,6 +296,9 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if closed {
 		return nil, errors.New("Monty pool is closed")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("checkout Monty worker: %w", err)
+	}
 	waitCtx := ctx
 	var cancel context.CancelFunc
 	if p.options.CheckoutTimeout > 0 {
@@ -298,6 +309,8 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	case p.slots <- struct{}{}:
 	case <-waitCtx.Done():
 		return nil, fmt.Errorf("checkout Monty worker: %w", waitCtx.Err())
+	case <-p.done:
+		return nil, errors.New("Monty pool is closed")
 	}
 	var w *worker
 	select {
@@ -309,6 +322,12 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 			<-p.slots
 			return nil, err
 		}
+	}
+	select {
+	case <-p.done:
+		p.release(w, false)
+		return nil, errors.New("Monty pool is closed")
+	default:
 	}
 	annotations, err := normalizeAnnotations(o.AssertMessageAnnotations)
 	if err != nil {
@@ -396,6 +415,7 @@ func (p *Monty) Close() error {
 		return nil
 	}
 	p.closed = true
+	close(p.done)
 	p.mu.Unlock()
 	for {
 		select {
@@ -538,9 +558,9 @@ func (w *worker) exchange(ctx context.Context, req request, onPrint PrintCallbac
 			w.killUnlocked()
 			stderr := w.stderrText()
 			if stderr != "" {
-				return childEvent{}, &CrashedError{Message: fmt.Sprintf("Monty worker failed: %v\n%s", a.err, stderr), ExitStatus: w.exitStatus()}
+				return childEvent{}, &CrashedError{Message: fmt.Sprintf("Monty worker failed: %v\n%s", a.err, stderr), ExitStatus: w.exitStatus(), cause: a.err}
 			}
-			return childEvent{}, &CrashedError{Message: fmt.Sprintf("Monty worker failed: %v", a.err), ExitStatus: w.exitStatus()}
+			return childEvent{}, &CrashedError{Message: fmt.Sprintf("Monty worker failed: %v", a.err), ExitStatus: w.exitStatus(), cause: a.err}
 		}
 		if a.event.kind == eventFatal {
 			w.dead = true
@@ -550,7 +570,13 @@ func (w *worker) exchange(ctx context.Context, req request, onPrint PrintCallbac
 	case <-ctx.Done():
 		w.dead = true
 		w.killUnlocked()
-		return childEvent{}, &CrashedError{Message: "Monty worker request timed out: " + ctx.Err().Error(), TimedOut: true, ExitStatus: w.exitStatus()}
+		cause := ctx.Err()
+		timedOut := errors.Is(cause, context.DeadlineExceeded)
+		message := "Monty worker request canceled: " + cause.Error()
+		if timedOut {
+			message = "Monty worker request timed out: " + cause.Error()
+		}
+		return childEvent{}, &CrashedError{Message: message, TimedOut: timedOut, ExitStatus: w.exitStatus(), cause: cause}
 	}
 }
 func (w *worker) kill() { w.mu.Lock(); defer w.mu.Unlock(); w.killUnlocked() }

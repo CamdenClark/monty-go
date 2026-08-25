@@ -361,9 +361,36 @@ func TestIntegrationRequestTimeoutKillsOnlyWorkerAndPoolRecovers(t *testing.T) {
 	if !errors.As(err, &crashed) || !crashed.TimedOut {
 		t.Fatalf("got %T %v", err, err)
 	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout cause was not preserved: %T %v", err, err)
+	}
 	_ = session.Close()
 	replacement := integrationSession(t, pool)
 	if got := run(t, replacement, "21 * 2"); got != int64(42) {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestIntegrationCallerCancellationIsPreserved(t *testing.T) {
+	pool := integrationPool(t, monty.Options{MinProcesses: 1, MaxProcesses: 1})
+	session := integrationSession(t, pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer timer.Stop()
+	_, err := session.FeedRun(ctx, "while True:\n    pass")
+	var crashed *monty.CrashedError
+	if !errors.As(err, &crashed) {
+		t.Fatalf("got %T %v", err, err)
+	}
+	if crashed.TimedOut {
+		t.Fatalf("explicit cancellation reported as timeout: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation cause was not preserved: %T %v", err, err)
+	}
+	_ = session.Close()
+	replacement := integrationSession(t, pool)
+	if got := run(t, replacement, "6 * 7"); got != int64(42) {
 		t.Fatalf("got %#v", got)
 	}
 }

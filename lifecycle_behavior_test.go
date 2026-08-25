@@ -130,6 +130,31 @@ func TestPoolCloseRejectsNewCheckout(t *testing.T) {
 	}
 }
 
+func TestPoolCloseUnblocksPendingCheckout(t *testing.T) {
+	pool := integrationPool(t, monty.Options{MinProcesses: 1, MaxProcesses: 1})
+	held := integrationSession(t, pool)
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := pool.Checkout(context.Background())
+		result <- err
+	}()
+	<-started
+	if err := pool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("got %T %v", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending checkout did not unblock when the pool closed")
+	}
+	_ = held
+}
+
 func TestPoolCloseKeepsCheckedOutSessionUsable(t *testing.T) {
 	pool := integrationPool(t)
 	session := integrationSession(t, pool)
@@ -182,7 +207,17 @@ func TestCheckoutHonorsCanceledContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %T %v", err, err)
 	}
-	_ = held
+	if err = held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Checkout(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled checkout with an available worker got %T %v", err, err)
+	}
+	healthy := integrationSession(t, pool)
+	if got := run(t, healthy, "6 * 7"); got != int64(42) {
+		t.Fatalf("got %#v", got)
+	}
 }
 
 func TestMountOverlayCreatedFileDoesNotPersist(t *testing.T) {
