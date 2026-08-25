@@ -203,6 +203,21 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 		p.Elem().Set(converted)
 		return p, nil
 	}
+	if b, ok := value.([]byte); ok && (target.Kind() == reflect.Slice || target.Kind() == reflect.Array) && target.Elem().Kind() == reflect.Uint8 {
+		switch target.Kind() {
+		case reflect.Slice:
+			out := reflect.MakeSlice(target, len(b), len(b))
+			reflect.Copy(out, reflect.ValueOf(b))
+			return out, nil
+		case reflect.Array:
+			if len(b) != target.Len() {
+				return reflect.Value{}, fmt.Errorf("%T cannot convert to %s", value, target)
+			}
+			out := reflect.New(target).Elem()
+			reflect.Copy(out, reflect.ValueOf(b))
+			return out, nil
+		}
+	}
 	switch target.Kind() {
 	case reflect.Slice:
 		items, ok := sequenceValues(value)
@@ -272,6 +287,9 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 			if name == "" {
 				name = strings.Split(f.Tag.Get("json"), ",")[0]
 			}
+			if name == "-" {
+				continue
+			}
 			if name == "" {
 				name = f.Name
 			}
@@ -292,7 +310,8 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 
 func safeDirectConversion(v reflect.Value, target reflect.Type) bool {
 	a, b := v.Kind(), target.Kind()
-	return (isSigned(a) && isSigned(b)) || (isUnsigned(a) && isUnsigned(b)) || (isFloat(a) && isFloat(b)) || a == reflect.String && b == reflect.String
+	return (isSigned(a) && isSigned(b)) || (isUnsigned(a) && isUnsigned(b)) || (isFloat(a) && isFloat(b)) ||
+		(a == reflect.Bool && b == reflect.Bool) || (a == reflect.String && b == reflect.String)
 }
 func isSigned(k reflect.Kind) bool   { return k >= reflect.Int && k <= reflect.Int64 }
 func isUnsigned(k reflect.Kind) bool { return k >= reflect.Uint && k <= reflect.Uintptr }
@@ -317,13 +336,16 @@ func numericTo(value Value, target reflect.Type) (reflect.Value, bool) {
 	case int64:
 		z = big.NewInt(x)
 	case *big.Int:
+		if x == nil {
+			return reflect.Value{}, false
+		}
 		z = x
 	case float64:
 		if target.Kind() != reflect.Float32 && target.Kind() != reflect.Float64 {
 			return reflect.Value{}, false
 		}
 		out := reflect.New(target).Elem()
-		if math.IsInf(x, 0) || out.OverflowFloat(x) {
+		if !math.IsInf(x, 0) && out.OverflowFloat(x) {
 			return reflect.Value{}, false
 		}
 		out.SetFloat(x)

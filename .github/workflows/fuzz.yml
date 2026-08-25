@@ -1,0 +1,33 @@
+name: fuzz
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Fuzz value conversions
+        env:
+          FUZZ_TIME: ${{ github.event_name == 'schedule' && '2m' || '10s' }}
+        run: |
+          for target in \
+            FuzzNumericValueConversion \
+            FuzzPrimitiveValueConversion \
+            FuzzStructuredValueConversion
+          do
+            go test -run '^$' -fuzz "^${target}$" -fuzztime="${FUZZ_TIME}" .
+          done
