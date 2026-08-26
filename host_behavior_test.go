@@ -147,6 +147,80 @@ func TestNestedHostReturnTranslation(t *testing.T) {
 	}
 }
 
+func TestDecodeMontyResultIntoGoStruct(t *testing.T) {
+	type address struct {
+		City string `json:"city"`
+	}
+	type user struct {
+		Name       string         `monty:"name"`
+		Address    *address       `monty:"address"`
+		Tags       []string       `monty:"tags"`
+		Scores     map[string]int `monty:"scores"`
+		Missing    bool           `monty:"missing"`
+		Ignored    string         `monty:"-"`
+		unexported string
+	}
+
+	session := integrationSession(t, integrationPool(t))
+	value := run(t, session, `{
+    "name": "Ada",
+    "address": {"city": "London"},
+    "tags": ["go", "python"],
+    "scores": {"correctness": 10},
+    "extra": "ignored",
+}`)
+	got, err := monty.Decode[user](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := user{
+		Name:    "Ada",
+		Address: &address{City: "London"},
+		Tags:    []string{"go", "python"},
+		Scores:  map[string]int{"correctness": 10},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestDecodeMontyResultReportsConversionPath(t *testing.T) {
+	type result struct {
+		Count int8 `monty:"count"`
+	}
+	_, err := monty.Decode[result](monty.Dict{{Key: "count", Value: int64(300)}})
+	if err == nil || !strings.Contains(err.Error(), "field Count") || !strings.Contains(err.Error(), "overflows int8") {
+		t.Fatalf("got %v", err)
+	}
+
+	pointer, err := monty.Decode[*result](nil)
+	if err != nil || pointer != nil {
+		t.Fatalf("nil pointer decode got %#v, %v", pointer, err)
+	}
+	interfaceValue, err := monty.Decode[any](nil)
+	if err != nil || interfaceValue != nil {
+		t.Fatalf("nil interface decode got %#v, %v", interfaceValue, err)
+	}
+	_, err = monty.Decode[map[any]any](monty.Dict{{Key: monty.List{int64(1)}, Value: "value"}})
+	if err == nil || !strings.Contains(err.Error(), "map key") || !strings.Contains(err.Error(), "not comparable") {
+		t.Fatalf("non-comparable map key got %v", err)
+	}
+
+	fromDataclass, err := monty.Decode[result](monty.Dataclass{
+		Attrs: monty.Dict{{Key: "count", Value: int64(42)}},
+	})
+	if err != nil || fromDataclass.Count != 42 {
+		t.Fatalf("dataclass decode got %#v, %v", fromDataclass, err)
+	}
+	fromNamedTuple, err := monty.Decode[result](monty.NamedTuple{
+		FieldNames: []string{"count"},
+		Values:     []monty.Value{int64(41)},
+	})
+	if err != nil || fromNamedTuple.Count != 41 {
+		t.Fatalf("named tuple decode got %#v, %v", fromNamedTuple, err)
+	}
+}
+
 func TestUnsupportedHostReturnRaisesPythonRuntimeError(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
 	lookup := monty.ExternalLookup{"unsupported": func() any { return make(chan int) }}

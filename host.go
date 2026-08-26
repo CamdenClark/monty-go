@@ -38,6 +38,25 @@ type notHandled struct{}
 // NotHandled is returned from an OSHandler when it does not handle a call.
 var NotHandled Value = notHandled{}
 
+// Decode recursively converts a value returned by Monty into T. Python
+// dictionaries, dataclasses, and named tuples convert to Go structs or maps,
+// and Python sequences convert to slices or arrays. Struct fields use the
+// monty tag, then the json tag, then the Go field name. Missing fields retain
+// their zero values and unknown keys are ignored.
+func Decode[T any](value Value) (T, error) {
+	var zero T
+	target := reflect.TypeFor[T]()
+	decoded, err := convertHostArg(value, target)
+	if err != nil {
+		return zero, fmt.Errorf("decode Monty value as %s: %w", target, err)
+	}
+	result := decoded.Interface()
+	if result == nil {
+		return zero, nil
+	}
+	return result.(T), nil
+}
+
 var (
 	contextType = reflect.TypeFor[context.Context]()
 	errorType   = reflect.TypeFor[error]()
@@ -248,7 +267,7 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 		}
 		return out, nil
 	case reflect.Map:
-		d, ok := value.(Dict)
+		d, ok := resultDict(value)
 		if !ok {
 			return reflect.Value{}, fmt.Errorf("%T cannot convert to %s", value, target)
 		}
@@ -256,17 +275,20 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 		for _, p := range d {
 			k, e := convertHostArg(p.Key, target.Key())
 			if e != nil {
-				return reflect.Value{}, e
+				return reflect.Value{}, fmt.Errorf("map key: %w", e)
+			}
+			if !k.Comparable() {
+				return reflect.Value{}, fmt.Errorf("map key of type %s is not comparable", k.Type())
 			}
 			x, e := convertHostArg(p.Value, target.Elem())
 			if e != nil {
-				return reflect.Value{}, e
+				return reflect.Value{}, fmt.Errorf("map value: %w", e)
 			}
 			out.SetMapIndex(k, x)
 		}
 		return out, nil
 	case reflect.Struct:
-		d, ok := value.(Dict)
+		d, ok := resultDict(value)
 		if !ok {
 			return reflect.Value{}, fmt.Errorf("%T cannot convert to %s", value, target)
 		}
@@ -306,6 +328,26 @@ func convertHostArg(value Value, target reflect.Type) (reflect.Value, error) {
 		return out, nil
 	}
 	return reflect.Value{}, fmt.Errorf("%T cannot convert to %s", value, target)
+}
+
+func resultDict(value Value) (Dict, bool) {
+	switch x := value.(type) {
+	case Dict:
+		return x, true
+	case Dataclass:
+		return x.Attrs, true
+	case NamedTuple:
+		if len(x.FieldNames) != len(x.Values) {
+			return nil, false
+		}
+		dict := make(Dict, len(x.Values))
+		for i, item := range x.Values {
+			dict[i] = Pair{Key: x.FieldNames[i], Value: item}
+		}
+		return dict, true
+	default:
+		return nil, false
+	}
 }
 
 func safeDirectConversion(v reflect.Value, target reflect.Type) bool {

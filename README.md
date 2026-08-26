@@ -81,6 +81,20 @@ result, err := session.FeedRun(ctx, `describe(user, excited=True)`, monty.FeedOp
 
 Ordinary functions are synchronous from Python. Mark a callback with `monty.Async(fn)` when Python should `await` it; the Go work then runs through Monty's external-future interface. Return `&monty.HostError{Type: "ValueError", Message: "..."}` to raise a chosen catchable Python exception.
 
+Python results can be decoded directly into typed Go values. Dictionaries map
+to structs using `monty` or `json` field tags, with recursive conversion for
+nested structs, pointers, slices, arrays, and maps:
+
+```go
+type User struct {
+    Name string   `monty:"name"`
+    Tags []string `monty:"tags"`
+}
+
+raw, _ := session.FeedRun(ctx, `{"name": "Ada", "tags": ["go"]}`)
+user, err := monty.Decode[User](raw)
+```
+
 ## Snapshots
 
 `FeedStart` stops at each external call, name lookup, OS call, or unresolved future. Resume manually or call `ResumeAuto` to use `ExternalLookup` and `OS` from the feed options. Snapshots are one-shot and can be serialized before resuming.
@@ -145,6 +159,6 @@ go run ./cmd/monty-install
 go test -race ./...
 ```
 
-The suite currently contains **76 named tests** (plus table-driven subtests). Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite currently contains **78 named tests** plus six fuzz targets and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.

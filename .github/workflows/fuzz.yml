@@ -27,7 +27,10 @@ jobs:
           for target in \
             FuzzNumericValueConversion \
             FuzzPrimitiveValueConversion \
-            FuzzStructuredValueConversion
+            FuzzStructuredValueConversion \
+            FuzzDecodeNestedResult \
+            FuzzDecodeArbitraryResult \
+            FuzzMalformedProtocolDecoders
           do
             go test -run '^$' -fuzz "^${target}$" -fuzztime="${FUZZ_TIME}" .
           done
