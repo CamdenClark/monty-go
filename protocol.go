@@ -47,7 +47,7 @@ func configureRequest(x configureWire) request {
 	if x.typeCheckStubs != nil {
 		b = append(b, fieldString(4, *x.typeCheckStubs)...)
 	}
-	b = append(b, fieldString(5, Version)...)
+	b = append(b, fieldString(5, RuntimeVersion)...)
 	if x.assertAnnotations != nil {
 		b = append(b, fieldVarint(6, uint64(*x.assertAnnotations))...)
 	}

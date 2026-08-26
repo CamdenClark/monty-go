@@ -421,6 +421,54 @@ func TestFindBinaryUsesInstalledRuntimeCache(t *testing.T) {
 	}
 }
 
+func TestFindBinaryPrefersVerifiedRuntimeCacheOverPath(t *testing.T) {
+	executable := []byte("verified cached runtime")
+	member := "package/monty"
+	if runtime.GOOS == "windows" {
+		member += ".exe"
+	}
+	archive := makeRuntimeArchive(t, member, executable, tar.TypeReg)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write(archive)
+	}))
+	defer server.Close()
+	artifact := fixtureArtifact(server.URL, archive, executable)
+	key := runtime.GOOS + "/" + runtime.GOARCH
+	original, hadOriginal := runtimeArtifacts[key]
+	runtimeArtifacts[key] = artifact
+	defer func() {
+		if hadOriginal {
+			runtimeArtifacts[key] = original
+		} else {
+			delete(runtimeArtifacts, key)
+		}
+	}()
+
+	cacheDir := t.TempDir()
+	cached, err := installRuntime(context.Background(), InstallOptions{CacheDir: cacheDir}, artifact, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathDir := t.TempDir()
+	pathBinary := filepath.Join(pathDir, "monty")
+	if runtime.GOOS == "windows" {
+		pathBinary += ".exe"
+	}
+	if err = os.WriteFile(pathBinary, []byte("arbitrary PATH runtime"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MONTY_BIN", "")
+	t.Setenv("PATH", pathDir)
+
+	found, err := findBinary("", cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != cached {
+		t.Fatalf("FindBinary = %q, want verified cache %q", found, cached)
+	}
+}
+
 func TestInstallPublicValidation(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()

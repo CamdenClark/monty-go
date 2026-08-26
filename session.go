@@ -513,14 +513,20 @@ func (s *FutureSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	return s.state.exchange(ctx, req, s.step)
 }
 
-// Resume resolves selected pending futures manually.
+// Resume resolves selected pending futures manually. A result that implements
+// error is raised in Python; all other results are returned successfully.
 func (s *FutureSnapshot) Resume(ctx context.Context, results map[uint32]Value) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
 	}
 	wire := make([]futureWireResult, 0, len(results))
 	for id, value := range results {
-		wire = append(wire, futureWireResult{id, resumeResult{value: value}})
+		result := resumeResult{value: value}
+		if resultErr, ok := value.(error); ok {
+			raised := raisedFromError(resultErr)
+			result = resumeResult{err: &raised}
+		}
+		wire = append(wire, futureWireResult{id, result})
 	}
 	req, err := resumeFuturesRequest(wire)
 	if err != nil {

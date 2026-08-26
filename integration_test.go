@@ -478,6 +478,118 @@ func TestIntegrationManualSnapshotVariants(t *testing.T) {
 	}
 }
 
+func TestIntegrationRestoreConcurrentFuturesAcrossPools(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	binary, err := monty.Install(ctx)
+	if err != nil {
+		t.Skipf("pinned Monty integration binary unavailable: %v", err)
+	}
+
+	pool, err := monty.New(ctx, monty.Options{BinaryPath: binary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := pool.Checkout(ctx)
+	if err != nil {
+		_ = pool.Close()
+		t.Fatal(err)
+	}
+	defer func(sourceSession *monty.Session, sourcePool *monty.Monty) {
+		_ = sourceSession.Close()
+		_ = sourcePool.Close()
+	}(session, pool)
+
+	code := `
+import asyncio
+
+try:
+    result = await asyncio.gather(succeed(), fail())
+except ValueError as e:
+    result = 'caught: ' + str(e)
+result
+`
+	p, err := session.FeedStart(ctx, code)
+	if err != nil {
+		_ = session.Close()
+		_ = pool.Close()
+		t.Fatal(err)
+	}
+	first, ok := p.(*monty.FunctionSnapshot)
+	if !ok {
+		t.Fatalf("first suspension = %T, want *monty.FunctionSnapshot", p)
+	}
+	p, err = first.ResumeFuture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, ok := p.(*monty.FunctionSnapshot)
+	if !ok {
+		t.Fatalf("second suspension = %T, want *monty.FunctionSnapshot", p)
+	}
+	p, err = second.ResumeFuture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futures, ok := p.(*monty.FutureSnapshot)
+	if !ok {
+		t.Fatalf("future suspension = %T, want *monty.FutureSnapshot", p)
+	}
+	dump, err := futures.Dump(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pool, err = monty.New(ctx, monty.Options{BinaryPath: binary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	session, err = pool.Checkout(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	restored, err := session.LoadSnapshot(ctx, dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredFutures, ok := restored.(*monty.FutureSnapshot)
+	if !ok {
+		t.Fatalf("restored suspension = %T, want *monty.FutureSnapshot", restored)
+	}
+
+	callIDs := map[string]uint32{
+		first.FunctionName:  first.CallID,
+		second.FunctionName: second.CallID,
+	}
+	if _, ok = callIDs["succeed"]; !ok {
+		t.Fatalf("calls = %q and %q, missing succeed", first.FunctionName, second.FunctionName)
+	}
+	if _, ok = callIDs["fail"]; !ok {
+		t.Fatalf("calls = %q and %q, missing fail", first.FunctionName, second.FunctionName)
+	}
+	results := map[uint32]any{
+		callIDs["succeed"]: "success",
+		callIDs["fail"]:    &monty.HostError{Type: "ValueError", Message: "restored failure"},
+	}
+	p, err = restoredFutures.Resume(ctx, results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, ok := p.(*monty.Complete)
+	want := "caught: restored failure"
+	if !ok || done.Output != want {
+		t.Fatalf("restored result = %T %#v, want %#v", p, p, want)
+	}
+}
+
 func TestIntegrationDependencyRequestAndFreshLoadRules(t *testing.T) {
 	pool := integrationPool(t)
 	session := integrationSession(t, pool)

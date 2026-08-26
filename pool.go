@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the version of this Go wrapper.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // Options configures a Monty worker pool.
 type Options struct {
@@ -172,8 +172,8 @@ func New(ctx context.Context, options ...Options) (*Monty, error) {
 // Create is an alias for New, matching the TypeScript wrapper's factory name.
 func Create(ctx context.Context, options ...Options) (*Monty, error) { return New(ctx, options...) }
 
-// FindBinary resolves a Monty executable: explicit path, MONTY_BIN, PATH, the
-// versioned runtime cache, an installed npm platform package, then a nearby
+// FindBinary resolves a Monty executable: explicit path, MONTY_BIN, the
+// versioned runtime cache, PATH, an installed npm platform package, then a nearby
 // Cargo target directory.
 func FindBinary(explicit string) (string, error) {
 	return findBinary(explicit, "")
@@ -188,9 +188,6 @@ func findBinary(explicit, cacheDir string) (string, error) {
 			return p, nil
 		}
 	}
-	if p, e := exec.LookPath("monty"); e == nil {
-		return p, nil
-	}
 	var cacheErr error
 	if artifact, e := currentRuntimeArtifact(); e == nil {
 		if p, e := cachedRuntimeBinary(cacheDir, artifact); e == nil {
@@ -198,6 +195,9 @@ func findBinary(explicit, cacheDir string) (string, error) {
 		} else {
 			cacheErr = e
 		}
+	}
+	if p, e := exec.LookPath("monty"); e == nil {
+		return p, nil
 	}
 	triple := ""
 	switch runtime.GOOS + "/" + runtime.GOARCH {

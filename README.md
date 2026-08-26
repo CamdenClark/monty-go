@@ -9,13 +9,18 @@ The library requires Go 1.25+. Its installer downloads only the current platform
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.3.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.4.0
 ```
 
 Applications can perform the same idempotent installation themselves:
 
 ```go
-path, err := monty.Install(ctx)
+binary, err := monty.Install(ctx)
+if err != nil { log.Fatal(err) }
+
+pool, err := monty.New(ctx, monty.Options{
+    BinaryPath: binary,
+})
 ```
 
 The installer downloads the official Pydantic platform archive directly over HTTPS, verifies pinned SHA-256 digests for both the archive and extracted executable, and stores it in a versioned directory under `os.UserCacheDir()`. Concurrent installers coordinate through a lock and publish the executable only after complete verification. Subsequent calls use the verified cached runtime without network access.
@@ -28,7 +33,7 @@ pool, err := monty.New(ctx, monty.Options{AutoInstall: true})
 
 Production and air-gapped deployments should run the installer while building the image, preserve the resulting cache directory, or provide a preinstalled worker through `Options.BinaryPath` or `MONTY_BIN`.
 
-Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, `PATH`, the versioned runtime cache, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory. The supported installer targets are macOS ARM64/x64, Linux ARM64/x64 using glibc, and Windows x64.
+Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, the versioned runtime cache, `PATH`, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory. Snapshot stores should retain the path returned by `Install` with the dump metadata and pass it as `BinaryPath` when restoring, because Monty dumps require a compatible runtime. The supported installer targets are macOS ARM64/x64, Linux ARM64/x64 using glibc, and Windows x64.
 
 ## Basic usage
 
@@ -45,9 +50,12 @@ import (
 
 func main() {
     ctx := context.Background()
-    if _, err := monty.Install(ctx); err != nil { log.Fatal(err) }
+    binary, err := monty.Install(ctx)
+    if err != nil { log.Fatal(err) }
 
-    pool, err := monty.New(ctx)
+    pool, err := monty.New(ctx, monty.Options{
+        BinaryPath: binary,
+    })
     if err != nil { log.Fatal(err) }
     defer pool.Close()
 
