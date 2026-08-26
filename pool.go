@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the version of this Go wrapper.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Options configures a Monty worker pool.
 type Options struct {

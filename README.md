@@ -9,7 +9,7 @@ The library requires Go 1.25+. Its installer downloads only the current platform
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.2.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.3.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -80,6 +80,8 @@ result, err := session.FeedRun(ctx, `describe(user, excited=True)`, monty.FeedOp
 ```
 
 Ordinary functions are synchronous from Python. Mark a callback with `monty.Async(fn)` when Python should `await` it; the Go work then runs through Monty's external-future interface. Return `&monty.HostError{Type: "ValueError", Message: "..."}` to raise a chosen catchable Python exception.
+
+Go structs returned by host functions are exposed to Monty as dictionaries. Arbitrary Go host objects and method calls are intentionally not exposed; register explicit host functions for each operation the sandbox may invoke.
 
 Python results can be decoded directly into typed Go values. Dictionaries map
 to structs using `monty` or `json` field tags, with recursive conversion for
