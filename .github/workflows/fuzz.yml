@@ -14,7 +14,7 @@ concurrency:
 jobs:
   go-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -30,7 +30,8 @@ jobs:
             FuzzStructuredValueConversion \
             FuzzDecodeNestedResult \
             FuzzDecodeArbitraryResult \
-            FuzzMalformedProtocolDecoders
+            FuzzMalformedProtocolDecoders \
+            FuzzProtocolV2Time
           do
             go test -run '^$' -fuzz "^${target}$" -fuzztime="${FUZZ_TIME}" .
           done

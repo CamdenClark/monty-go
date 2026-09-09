@@ -148,6 +148,8 @@ type FunctionSnapshot struct {
 	Kwargs       Dict
 	CallID       uint32
 	MethodCall   bool
+	// ObjectID identifies an upstream host-object receiver, when present.
+	ObjectID     *[16]byte
 	IsOSFunction bool
 }
 
@@ -159,6 +161,8 @@ type NameLookupSnapshot struct {
 	step  uint64
 	used  atomic.Bool
 	Name  string
+	// ObjectID is set for an attribute lookup; automatic resolution denies it.
+	ObjectID *[16]byte
 }
 
 func (*NameLookupSnapshot) isProgress() {}
@@ -261,7 +265,7 @@ func (r *runState) progress(e childEvent) (Progress, error) {
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
-		return &FunctionSnapshot{state: r, step: r.step, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall}, nil
+		return &FunctionSnapshot{state: r, step: r.step, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall, ObjectID: c.ObjectID}, nil
 	case eventOSCall:
 		c, err := decodeOSCall(e.body)
 		if err != nil {
@@ -269,7 +273,20 @@ func (r *runState) progress(e childEvent) (Progress, error) {
 		}
 		return &FunctionSnapshot{state: r, step: r.step, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, IsOSFunction: true}, nil
 	case eventNameLookup:
-		return &NameLookupSnapshot{state: r, step: r.step, Name: decodeStringField(e.body, 1)}, nil
+		snapshot := &NameLookupSnapshot{state: r, step: r.step, Name: decodeStringField(e.body, 1)}
+		if err := parseFields(e.body, func(f wireField) error {
+			if f.tag == 2 {
+				id, err := decodeUUID(f.bytes)
+				if err != nil {
+					return err
+				}
+				snapshot.ObjectID = &id
+			}
+			return nil
+		}); err != nil {
+			return nil, &ProtocolError{err.Error()}
+		}
+		return snapshot, nil
 	case eventResolveFutures:
 		return &FutureSnapshot{state: r, step: r.step, PendingCallIDs: decodeUint32List(e.body, 1)}, nil
 	case eventError:
@@ -463,6 +480,9 @@ func (s *NameLookupSnapshot) ResumeUndefined(ctx context.Context) (Progress, err
 func (s *NameLookupSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
+	}
+	if s.ObjectID != nil {
+		return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step)
 	}
 	value, ok := s.state.options.ExternalLookup[s.Name]
 	if !ok {

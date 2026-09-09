@@ -2,14 +2,14 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+This release pins Monty **0.0.23** and uses subprocess protocol **v2**. The library requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
 
 ## Runtime installation
 
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.4.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.5.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -34,6 +34,19 @@ pool, err := monty.New(ctx, monty.Options{AutoInstall: true})
 Production and air-gapped deployments should run the installer while building the image, preserve the resulting cache directory, or provide a preinstalled worker through `Options.BinaryPath` or `MONTY_BIN`.
 
 Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, the versioned runtime cache, `PATH`, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory. Snapshot stores should retain the path returned by `Install` with the dump metadata and pass it as `BinaryPath` when restoring, because Monty dumps require a compatible runtime. The supported installer targets are macOS ARM64/x64, Linux ARM64/x64 using glibc, and Windows x64.
+
+## Upgrading to v0.5.0
+
+Monty 0.0.23 requires protocol v2; older worker binaries are incompatible. Run
+`monty-install` again and update any explicit `BinaryPath` or `MONTY_BIN` override.
+Retain the old worker when restoring snapshots created by an earlier runtime.
+
+Protocol v2 replaces the old dataclass wire format with `ClassInstance`, including
+class metadata, instance/class UUIDs, and attributes. `Dataclass` and
+`InstanceType` remain available for source compatibility but are rejected as
+execution inputs. Use dictionaries or ordinary Go structs for host inputs.
+Class results are output-only; host object methods and lazy attributes are not
+exposed. `Time` now preserves `datetime.time` values, including offsets and fold.
 
 ## Basic usage
 
@@ -72,7 +85,7 @@ func main() {
 
 ## Inputs and host functions
 
-Ordinary Go primitives, slices, maps, exported structs, `time.Time`, `time.Duration`, and `*big.Int` are converted automatically. The named types `Tuple`, `Dict`, `Set`, `FrozenSet`, `Date`, `DateTime`, `TimeDelta`, `TimeZone`, `Path`, `FileHandle`, `NamedTuple`, and `Dataclass` preserve Python distinctions exactly.
+Ordinary Go primitives, slices, maps, exported structs, `time.Time`, `time.Duration`, and `*big.Int` are converted automatically. The named types `Tuple`, `Dict`, `Set`, `FrozenSet`, `Date`, `Time`, `DateTime`, `TimeDelta`, `TimeZone`, `Path`, `FileHandle`, `NamedTuple`, and output-only `ClassInstance` preserve Python distinctions. Class instances include a `ClassType` descriptor and UUID identities; `Decode` maps their attributes to Go structs.
 
 Go functions are adapted through reflection. They may accept `context.Context`, typed positional parameters, variadic parameters, and a final `monty.Kwargs`; supported returns are `T`, `error`, or `(T, error)`.
 
@@ -169,6 +182,17 @@ go run ./cmd/monty-install
 go test -race ./...
 ```
 
-The suite currently contains **78 named tests** plus six fuzz targets and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite currently contains **86 named tests** plus seven fuzz targets and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.
+
+Run all fuzz targets locally (CI also runs these on pushes, PRs, and weekly):
+
+```bash
+for target in FuzzNumericValueConversion FuzzPrimitiveValueConversion \
+  FuzzStructuredValueConversion FuzzDecodeNestedResult FuzzDecodeArbitraryResult \
+  FuzzMalformedProtocolDecoders FuzzProtocolV2Time
+do
+  go test -run '^$' -fuzz "^${target}$" -fuzztime=60s .
+done
+```

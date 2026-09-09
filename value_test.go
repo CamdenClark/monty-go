@@ -17,8 +17,8 @@ func TestValueWireRoundTrip(t *testing.T) {
 		Dict{{Key: Tuple{int64(1)}, Value: "tuple key"}}, NamedTuple{TypeName: "Point", FieldNames: []string{"x", "y"}, Values: []Value{int64(1), int64(2)}},
 		Date{2026, 8, 24}, DateTime{Year: 2026, Month: 8, Day: 24, Hour: 12, OffsetSeconds: &offset, TimezoneName: &zone},
 		TimeDelta{-1, 86399, 999999}, TimeZone{offset, &zone}, Exception{"ValueError", "bad"}, Type("int"),
-		BuiltinFunction("len"), Path("/a/b"), FileHandle{"/a", "rb", 3}, Dataclass{"Point", 9, []string{"x"}, Dict{{Key: "x", Value: int64(1)}}, true},
-		Function{Name: "host"}, InstanceType("Thing"),
+		BuiltinFunction("len"), Path("/a/b"), FileHandle{"/a", "rb", 3},
+		Function{Name: "host"},
 	}
 	for _, value := range values {
 		name := "nil"

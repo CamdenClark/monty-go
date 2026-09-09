@@ -18,6 +18,10 @@ func integrationPool(t *testing.T, options ...monty.Options) *monty.Monty {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
+	// Snapshot tests hold several sessions concurrently, even on small CI hosts.
+	if len(options) == 0 {
+		options = []monty.Options{{MaxProcesses: 4}}
+	}
 	pool, err := monty.New(ctx, options...)
 	if err != nil {
 		if os.Getenv("MONTY_BIN") == "" {
@@ -31,7 +35,9 @@ func integrationPool(t *testing.T, options ...monty.Options) *monty.Monty {
 
 func integrationSession(t *testing.T, pool *monty.Monty, options ...monty.CheckoutOptions) *monty.Session {
 	t.Helper()
-	session, err := pool.Checkout(context.Background(), options...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := pool.Checkout(ctx, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,5 +644,43 @@ func TestIntegrationTypeCheckingAndResourceLimits(t *testing.T) {
 	var montyErr monty.Error
 	if !errors.As(err, &montyErr) {
 		t.Fatalf("duration limit got %T %v", err, err)
+	}
+}
+
+func TestIntegrationProtocolV2Values(t *testing.T) {
+	session := integrationSession(t, integrationPool(t))
+	offset, zone := 3600, "UTC+1"
+	clock := monty.Time{Hour: 12, Minute: 34, Second: 56, Microsecond: 123, OffsetSeconds: &offset, TimezoneName: &zone, Fold: 1}
+	if got := run(t, session, "value", monty.FeedOptions{Inputs: map[string]any{"value": clock}}); !reflect.DeepEqual(got, clock) {
+		t.Fatalf("time round trip = %#v, want %#v", got, clock)
+	}
+	if got := run(t, session, "int"); got != monty.Type("int") {
+		t.Fatalf("builtin type = %#v", got)
+	}
+	if got := run(t, session, "NotImplemented"); got != (monty.NotImplemented{}) {
+		t.Fatalf("singleton = %#v", got)
+	}
+	got := run(t, session, "class Point:\n    def __init__(self, x):\n        self.x = x\np = Point(42)\n(p, p)").(monty.Tuple)
+	instance, ok := got[0].(monty.ClassInstance)
+	if !ok {
+		t.Fatalf("instance = %T %#v", got[0], got[0])
+	}
+	class := instance.Type
+	if class.Name != "Point" || class.Origin != monty.TypeOriginSandbox || class.ID != got[1].(monty.ClassInstance).Type.ID || instance.ID != got[1].(monty.ClassInstance).ID {
+		t.Fatalf("class identities = %#v", got)
+	}
+	decoded, err := monty.Decode[struct {
+		X int `monty:"x"`
+	}](instance)
+	if err != nil || decoded.X != 42 {
+		t.Fatalf("class decode = %#v, %v", decoded, err)
+	}
+	gotDC := run(t, session, "from dataclasses import dataclass\n@dataclass\nclass Record:\n    value: int\nRecord(7)")
+	dc, ok := gotDC.(monty.ClassInstance)
+	if !ok || !dc.Type.IsDataclass {
+		t.Fatalf("dataclass = %#v", gotDC)
+	}
+	if got := run(t, session, "'Hello, {}!'.format('Monty')"); got != "Hello, Monty!" {
+		t.Fatalf("str.format = %#v", got)
 	}
 }

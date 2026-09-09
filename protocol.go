@@ -54,6 +54,8 @@ func configureRequest(x configureWire) request {
 	b = append(b, fieldVarint(7, uint64(x.typeCheckFormat.wire()))...)
 	b = append(b, fieldBool(8, x.typeCheckColor)...)
 	b = append(b, fieldVarint(9, protocolVersion)...)
+	// Preserve per-line print callbacks with upstream print debouncing.
+	b = append(b, fieldVarint(10, 0)...)
 	return request{reqConfigure, b}
 }
 
@@ -257,6 +259,7 @@ type callEvent struct {
 	Kwargs     Dict
 	CallID     uint32
 	MethodCall bool
+	ObjectID   *[16]byte
 	OS         bool
 }
 
@@ -292,7 +295,12 @@ func decodeFunctionCall(data []byte) (callEvent, error) {
 		case 4:
 			x.CallID = uint32(f.varint)
 		case 5:
-			x.MethodCall = f.varint != 0
+			id, err := decodeUUID(f.bytes)
+			if err != nil {
+				return err
+			}
+			x.ObjectID = &id
+			x.MethodCall = true
 		}
 		return nil
 	})

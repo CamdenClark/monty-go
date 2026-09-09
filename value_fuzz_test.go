@@ -164,9 +164,38 @@ func FuzzStructuredValueConversion(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Exercise protocol v2 class identities and nested attributes using the
+		// same conversion oracle as ordinary dictionaries.
+		_, attrs, err := consumeSingleField(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id [16]byte
+		copy(id[:], payload)
+		uuid := fieldBytes(1, id[:])
+		class := append(fieldString(1, "Record"), fieldMessage(2, uuid)...)
+		class = append(class, fieldVarint(3, uint64(TypeOriginSandbox))...)
+		class = append(class, fieldBool(4, enabled)...)
+		instance := append(fieldMessage(1, class), fieldMessage(2, uuid)...)
+		instance = append(instance, fieldMessage(3, attrs)...)
+		classValue, err := decodeValue(fieldMessage(24, instance))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ci := classValue.(ClassInstance)
+		if ci.ID != id || ci.Type.ID != id || ci.Type.Name != "Record" || ci.Type.IsDataclass != enabled {
+			t.Fatalf("class metadata = %#v", ci)
+		}
+		classResult, err := convertHostArg(ci, reflect.TypeFor[fuzzStruct]())
+		if err != nil {
+			t.Fatal(err)
+		}
 		converted, err := convertHostArg(decoded, reflect.TypeFor[fuzzStruct]())
 		if err != nil {
 			t.Fatalf("convert struct: %v", err)
+		}
+		if !reflect.DeepEqual(classResult.Interface(), converted.Interface()) {
+			t.Fatal("class attributes decoded differently from dictionary")
 		}
 		got := converted.Interface().(fuzzStruct)
 		if string(got.Name) != name || bool(got.Enabled) != enabled || !bytes.Equal(got.Payload, payload) || uint16(got.Count) != count {

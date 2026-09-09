@@ -87,7 +87,10 @@ type Exception struct {
 // Type is a Python built-in type object, such as "int" or "ValueError".
 type Type string
 
-// InstanceType names the type object of a sandbox-defined class.
+// InstanceType is the legacy name-only sandbox type representation.
+//
+// Deprecated: protocol v2 uses class descriptors with UUIDs. InstanceType inputs
+// are rejected.
 type InstanceType string
 
 // BuiltinFunction is a Python builtin function value.
@@ -172,7 +175,9 @@ func CanonicalFileMode(mode string) (string, error) {
 	return result, nil
 }
 
-// Dataclass is a lossless host representation of a Python dataclass instance.
+// Dataclass is the legacy protocol v1 dataclass representation.
+//
+// Deprecated: protocol v2 returns ClassInstance. Dataclass inputs are rejected.
 type Dataclass struct {
 	Name       string
 	TypeID     uint64
@@ -244,61 +249,65 @@ func (e *valueEncoder) encode(v reflect.Value, depth int) ([]byte, error) {
 		case Ellipsis:
 			return fieldMessage(1, nil), nil
 		case NotImplemented:
-			return fieldMessage(29, nil), nil
+			return fieldMessage(3, nil), nil
 		case Tuple:
-			return e.encodeObjectList(10, []Value(x), depth)
+			return e.encodeObjectList(12, []Value(x), depth)
 		case List:
-			return e.encodeObjectList(9, []Value(x), depth)
+			return e.encodeObjectList(11, []Value(x), depth)
 		case Set:
-			return e.encodeObjectList(13, []Value(x), depth)
+			return e.encodeObjectList(15, []Value(x), depth)
 		case FrozenSet:
-			return e.encodeObjectList(14, []Value(x), depth)
+			return e.encodeObjectList(16, []Value(x), depth)
 		case Dict:
 			return e.encodeDict(x, depth)
 		case NamedTuple:
 			return e.encodeNamedTuple(x, depth)
 		case Date:
-			return fieldMessage(15, encodeDate(x)), nil
+			return fieldMessage(17, encodeDate(x)), nil
+		case Time:
+			return fieldMessage(18, encodeTime(x)), nil
+		case ClassType, ClassInstance:
+			return nil, fmt.Errorf("%T is output-only; host objects are not supported", x)
 		case DateTime:
-			return fieldMessage(16, encodeDateTime(x)), nil
+			return fieldMessage(19, encodeDateTime(x)), nil
 		case TimeDelta:
-			return fieldMessage(17, encodeTimeDelta(x)), nil
+			return fieldMessage(20, encodeTimeDelta(x)), nil
 		case TimeZone:
-			return fieldMessage(18, encodeTimeZone(x)), nil
+			return fieldMessage(21, encodeTimeZone(x)), nil
 		case Exception:
-			return fieldMessage(19, encodeException(x)), nil
+			return fieldMessage(22, encodeException(x)), nil
 		case Type:
-			return fieldString(20, string(x)), nil
+			return fieldMessage(23, append(fieldString(1, string(x)), fieldVarint(3, 1)...)), nil
 		case BuiltinFunction:
-			return fieldString(21, string(x)), nil
+			return fieldString(26, string(x)), nil
 		case Path:
-			return fieldString(22, string(x)), nil
+			return fieldString(27, string(x)), nil
 		case FileHandle:
-			return fieldMessage(23, encodeFileHandle(x)), nil
+			return fieldMessage(28, encodeFileHandle(x)), nil
 		case Dataclass:
-			return e.encodeDataclass(x, depth)
+			return nil, fmt.Errorf("Dataclass inputs are no longer supported by Monty protocol v2; use a Dict or Go struct")
 		case Function:
 			return fieldMessage(25, encodeFunction(x)), nil
 		case InstanceType:
-			return fieldString(28, string(x)), nil
+			return nil, fmt.Errorf("InstanceType cannot be used as an execution input")
 		case *big.Int:
 			if x == nil {
 				return fieldMessage(2, nil), nil
 			}
-			return fieldMessage(5, encodeBigInt(x)), nil
+			return fieldMessage(6, encodeBigInt(x)), nil
 		case big.Int:
-			return fieldMessage(5, encodeBigInt(&x)), nil
+			return fieldMessage(6, encodeBigInt(&x)), nil
 		case time.Time:
-			return fieldMessage(16, encodeGoTime(x)), nil
+			return fieldMessage(19, encodeGoTime(x)), nil
 		case time.Duration:
-			return fieldMessage(17, encodeDuration(x)), nil
+			return fieldMessage(20, encodeDuration(x)), nil
 		}
 		if m, ok := v.Interface().(encoding.TextMarshaler); ok {
 			text, err := m.MarshalText()
 			if err != nil {
 				return nil, fmt.Errorf("marshal %s: %w", v.Type(), err)
 			}
-			return fieldString(7, string(text)), nil
+			return fieldString(8, string(text)), nil
 		}
 	}
 
@@ -306,35 +315,35 @@ func (e *valueEncoder) encode(v reflect.Value, depth int) ([]byte, error) {
 	case reflect.Pointer:
 		return e.encode(v.Elem(), depth)
 	case reflect.Bool:
-		return fieldBool(3, v.Bool()), nil
+		return fieldBool(4, v.Bool()), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return fieldSInt64(4, v.Int()), nil
+		return fieldSInt64(5, v.Int()), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		u := v.Uint()
 		if u <= math.MaxInt64 {
-			return fieldSInt64(4, int64(u)), nil
+			return fieldSInt64(5, int64(u)), nil
 		}
 		z := new(big.Int).SetUint64(u)
-		return fieldMessage(5, encodeBigInt(z)), nil
+		return fieldMessage(6, encodeBigInt(z)), nil
 	case reflect.Float32, reflect.Float64:
-		return fieldFixed64(6, math.Float64bits(v.Convert(reflect.TypeFor[float64]()).Float())), nil
+		return fieldFixed64(7, math.Float64bits(v.Convert(reflect.TypeFor[float64]()).Float())), nil
 	case reflect.String:
-		return fieldString(7, v.String()), nil
+		return fieldString(8, v.String()), nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			if v.IsNil() {
-				return fieldBytes(8, nil), nil
+				return fieldBytes(9, nil), nil
 			}
-			return fieldBytes(8, v.Bytes()), nil
+			return fieldBytes(9, v.Bytes()), nil
 		}
-		return e.encodeReflectList(9, v, depth)
+		return e.encodeReflectList(11, v, depth)
 	case reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			b := make([]byte, v.Len())
 			reflect.Copy(reflect.ValueOf(b), v)
-			return fieldBytes(8, b), nil
+			return fieldBytes(9, b), nil
 		}
-		return e.encodeReflectList(9, v, depth)
+		return e.encodeReflectList(11, v, depth)
 	case reflect.Map:
 		return e.encodeMap(v, depth)
 	case reflect.Struct:
@@ -381,7 +390,7 @@ func (e *valueEncoder) encodeDict(dict Dict, depth int) ([]byte, error) {
 		}
 		body = append(body, fieldMessage(1, append(fieldMessage(1, key), fieldMessage(2, value)...))...)
 	}
-	return fieldMessage(12, body), nil
+	return fieldMessage(14, body), nil
 }
 
 func (e *valueEncoder) encodeMap(v reflect.Value, depth int) ([]byte, error) {
@@ -437,22 +446,7 @@ func (e *valueEncoder) encodeNamedTuple(x NamedTuple, depth int) ([]byte, error)
 		}
 		body = append(body, fieldMessage(3, encoded)...)
 	}
-	return fieldMessage(11, body), nil
-}
-
-func (e *valueEncoder) encodeDataclass(x Dataclass, depth int) ([]byte, error) {
-	dictWire, err := e.encodeDict(x.Attrs, depth+1)
-	if err != nil {
-		return nil, err
-	}
-	_, dictBody, _ := consumeSingleField(dictWire)
-	body := append(fieldString(1, x.Name), fieldVarint(2, x.TypeID)...)
-	for _, name := range x.FieldNames {
-		body = append(body, fieldString(3, name)...)
-	}
-	body = append(body, fieldMessage(4, dictBody)...)
-	body = append(body, fieldBool(5, x.Frozen)...)
-	return fieldMessage(24, body), nil
+	return fieldMessage(13, body), nil
 }
 
 func encodeBigInt(x *big.Int) []byte {

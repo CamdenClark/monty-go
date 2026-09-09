@@ -167,7 +167,7 @@ func fuzzBoundaryValue(data []byte, depth int) Value {
 	case 5:
 		return Dict{{Key: left, Value: right}}
 	case 6:
-		return Dataclass{Attrs: Dict{{Key: "value", Value: left}, {Key: "nested", Value: right}}}
+		return ClassInstance{Attrs: Dict{{Key: "value", Value: left}, {Key: "nested", Value: right}}}
 	case 7:
 		fields := []string{"value", "items"}
 		values := []Value{left, right}
@@ -200,7 +200,11 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 	f.Add([]byte{0x0a, 0x03, 'a'})
 
 	offset, zoneName, docstring := 3600, "UTC+1", "documentation"
+	for _, seed := range protocolV2ClassSeeds() {
+		f.Add(seed)
+	}
 	boundaryValues := []Value{
+		Time{Hour: 23, Microsecond: 999999, OffsetSeconds: &offset, TimezoneName: &zoneName, Fold: 1},
 		Ellipsis{}, nil, true, int64(-42), big.NewInt(1 << 62), 3.5,
 		"text", []byte{0, 1, 255}, List{"item"}, Tuple{int64(1)},
 		NamedTuple{TypeName: "Point", FieldNames: []string{"x"}, Values: []Value{int64(1)}},
@@ -210,9 +214,8 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 		TimeDelta{Days: -1, Seconds: 2, Microseconds: 3}, TimeZone{OffsetSeconds: 3600, Name: &zoneName},
 		Exception{Type: "ValueError", Message: "bad value"}, Type("int"), BuiltinFunction("len"), Path("/virtual"),
 		FileHandle{Path: "/virtual/file", Mode: "rb", Position: 4},
-		Dataclass{Name: "Point", TypeID: 7, FieldNames: []string{"x"}, Attrs: Dict{{Key: "x", Value: int64(1)}}, Frozen: true},
 		Function{Name: "callback", Docstring: &docstring}, Repr("<opaque>"), Cycle{Identity: 9, Placeholder: "[...]"},
-		InstanceType("Widget"), NotImplemented{},
+		NotImplemented{},
 	}
 	for _, value := range boundaryValues {
 		wire, err := encodeValue(value)
@@ -278,6 +281,10 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 				}
 			}
 		}
+		_, _ = decodeClassType(data)
+		_, _ = decodeClassInstance(data)
+		_, _ = decodeUUID(data)
+		_ = decodeTime(data)
 		_, _ = decodeEvent(data)
 		_ = decodePrint(data)
 		_, _ = decodeFunctionCall(data)

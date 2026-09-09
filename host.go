@@ -334,6 +334,8 @@ func resultDict(value Value) (Dict, bool) {
 	switch x := value.(type) {
 	case Dict:
 		return x, true
+	case ClassInstance:
+		return x.Attrs, true
 	case Dataclass:
 		return x.Attrs, true
 	case NamedTuple:

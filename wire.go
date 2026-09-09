@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	protocolVersion = 1
+	protocolVersion = 2
 	maxFrameLen     = 256 << 20
 )
 
@@ -152,11 +152,11 @@ func decodeValue(data []byte) (Value, error) {
 			result = Ellipsis{}
 		case 2:
 			result = nil
-		case 3:
-			result = f.varint != 0
 		case 4:
-			result = protowire.DecodeZigZag(f.varint)
+			result = f.varint != 0
 		case 5:
+			result = protowire.DecodeZigZag(f.varint)
+		case 6:
 			var negative bool
 			magnitude := []byte{}
 			if err := parseFields(f.bytes, func(x wireField) error {
@@ -175,68 +175,78 @@ func decodeValue(data []byte) (Value, error) {
 				z.Neg(z)
 			}
 			result = z
-		case 6:
-			result = math.Float64frombits(f.fixed64)
 		case 7:
-			result = string(f.bytes)
+			result = math.Float64frombits(f.fixed64)
 		case 8:
+			result = string(f.bytes)
+		case 9:
 			result = append([]byte(nil), f.bytes...)
-		case 9, 10, 13, 14:
+		case 11, 12, 15, 16:
 			items, err := decodeObjectList(f.bytes)
 			if err != nil {
 				return err
 			}
 			switch f.tag {
-			case 9:
+			case 11:
 				result = List(items)
-			case 10:
+			case 12:
 				result = Tuple(items)
-			case 13:
+			case 15:
 				result = Set(items)
-			case 14:
+			case 16:
 				result = FrozenSet(items)
 			}
-		case 11:
+		case 13:
 			x, err := decodeNamedTuple(f.bytes)
 			if err != nil {
 				return err
 			}
 			result = x
-		case 12:
+		case 14:
 			x, err := decodeDict(f.bytes)
 			if err != nil {
 				return err
 			}
 			result = x
-		case 15:
-			result = decodeDate(f.bytes)
-		case 16:
-			result = decodeDateTime(f.bytes)
 		case 17:
-			result = decodeTimeDelta(f.bytes)
+			result = decodeDate(f.bytes)
 		case 18:
-			result = decodeTimeZone(f.bytes)
+			result = decodeTime(f.bytes)
 		case 19:
-			result = decodeExceptionValue(f.bytes)
+			result = decodeDateTime(f.bytes)
 		case 20:
-			result = Type(string(f.bytes))
+			result = decodeTimeDelta(f.bytes)
 		case 21:
-			result = BuiltinFunction(string(f.bytes))
+			result = decodeTimeZone(f.bytes)
 		case 22:
-			result = Path(string(f.bytes))
+			result = decodeExceptionValue(f.bytes)
 		case 23:
+			x, err := decodeClassType(f.bytes)
+			if err != nil {
+				return err
+			}
+			if x.Origin == TypeOriginBuiltin {
+				result = Type(x.Name)
+			} else {
+				result = x
+			}
+		case 26:
+			result = BuiltinFunction(string(f.bytes))
+		case 27:
+			result = Path(string(f.bytes))
+		case 28:
 			result = decodeFileHandle(f.bytes)
 		case 24:
-			x, err := decodeDataclass(f.bytes)
+			x, err := decodeClassInstance(f.bytes)
 			if err != nil {
 				return err
 			}
 			result = x
 		case 25:
 			result = decodeFunction(f.bytes)
-		case 26:
+		case 29:
 			result = Repr(string(f.bytes))
-		case 27:
+		case 30:
 			var x Cycle
 			_ = parseFields(f.bytes, func(v wireField) error {
 				if v.tag == 1 {
@@ -248,9 +258,7 @@ func decodeValue(data []byte) (Value, error) {
 				return nil
 			})
 			result = x
-		case 28:
-			result = InstanceType(string(f.bytes))
-		case 29:
+		case 3:
 			result = NotImplemented{}
 		default:
 			return fmt.Errorf("unknown MontyObject kind tag %d", f.tag)
@@ -446,29 +454,6 @@ func decodeFunction(data []byte) Function {
 		return nil
 	})
 	return x
-}
-func decodeDataclass(data []byte) (Dataclass, error) {
-	var x Dataclass
-	err := parseFields(data, func(f wireField) error {
-		switch f.tag {
-		case 1:
-			x.Name = string(f.bytes)
-		case 2:
-			x.TypeID = f.varint
-		case 3:
-			x.FieldNames = append(x.FieldNames, string(f.bytes))
-		case 4:
-			d, e := decodeDict(f.bytes)
-			if e != nil {
-				return e
-			}
-			x.Attrs = d
-		case 5:
-			x.Frozen = f.varint != 0
-		}
-		return nil
-	})
-	return x, err
 }
 
 // DictMap converts a Dict with string keys to a Go map.
