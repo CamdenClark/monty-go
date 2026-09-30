@@ -9,7 +9,7 @@ The library targets **Monty 1.0.0** (subprocess protocol 5) and requires Go 1.25
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.5.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.6.0
 ```
 
 Applications can perform the same idempotent installation themselves:
