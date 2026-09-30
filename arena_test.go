@@ -27,24 +27,6 @@ func TestArenaRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArenaSharedReferencesAndBounds(t *testing.T) {
-	// Two list entries reference the same child node.
-	node := fieldMessage(11, append(fieldVarint(1, 0), fieldVarint(1, 0)...))
-	values, err := decodeArena(append(fieldMessage(2, fieldString(8, "shared")), fieldMessage(2, node)...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(values[1], List{"shared", "shared"}) {
-		t.Fatal(values)
-	}
-	if _, err := decodeArena(fieldMessage(2, node)); err == nil {
-		t.Fatal("forward reference accepted")
-	}
-	if _, err := decodeArena(fieldMessage(2, nil)); err == nil {
-		t.Fatal("empty node accepted")
-	}
-}
-
 func TestPrintSegmentsPreserveOrder(t *testing.T) {
 	b := append(fieldMessage(1, append(fieldVarint(1, 1), fieldString(2, "out")...)), fieldMessage(1, append(fieldVarint(1, 2), fieldString(2, "err")...))...)
 	if got := decodePrintSegments(b); !reflect.DeepEqual(got, []printEvent{{Stdout, "out"}, {Stderr, "err"}}) {
@@ -76,14 +58,15 @@ func TestArenaMutableReferences(t *testing.T) {
 func TestArenaInvalidReferences(t *testing.T) {
 	leaf := fieldMessage(2, fieldString(8, "key"))
 	for name, node := range map[string][]byte{
+		"empty node":              nil,
 		"self":                    fieldMessage(11, fieldVarint(1, 1)),
 		"out of range":            fieldMessage(12, fieldVarint(1, 100)),
 		"truncated packed index":  fieldMessage(15, fieldBytes(1, []byte{128})),
 		"dict key":                fieldMessage(14, fieldMessage(1, append(fieldVarint(1, 9), fieldVarint(2, 0)...))),
 		"dict value":              fieldMessage(14, fieldMessage(1, append(fieldVarint(1, 0), fieldVarint(2, 9)...))),
 		"named tuple":             fieldMessage(13, fieldVarint(3, 9)),
-		"class":                   fieldMessage(24, fieldVarint(1, 9)),
-		"class references string": fieldMessage(24, fieldVarint(1, 0)),
+		"class":                   fieldMessage(24, append(fieldVarint(1, 9), fieldMessage(2, fieldBytes(1, []byte("0123456789abcdef")))...)),
+		"class references string": fieldMessage(24, append(fieldVarint(1, 0), fieldMessage(2, fieldBytes(1, []byte("0123456789abcdef")))...)),
 		"multiple kinds":          append(fieldString(8, "x"), fieldBool(4, true)...),
 		"unknown kind":            fieldMessage(99, nil),
 	} {

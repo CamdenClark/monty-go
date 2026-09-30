@@ -650,7 +650,7 @@ func TestIntegrationTypeCheckingAndResourceLimits(t *testing.T) {
 	}
 }
 
-func TestIntegrationProtocolV2Values(t *testing.T) {
+func TestIntegrationClassValuesAndTime(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
 	offset, zone := 3600, "UTC+1"
 	clock := monty.Time{Hour: 12, Minute: 34, Second: 56, Microsecond: 123, OffsetSeconds: &offset, TimezoneName: &zone, Fold: 1}

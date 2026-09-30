@@ -202,7 +202,7 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 	f.Add([]byte{0x0a, 0x03, 'a'})
 
 	offset, zoneName, docstring := 3600, "UTC+1", "documentation"
-	for _, seed := range protocolV2ClassSeeds() {
+	for _, seed := range recursiveClassSeeds() {
 		f.Add(seed)
 	}
 	boundaryValues := []Value{

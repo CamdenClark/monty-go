@@ -35,19 +35,6 @@ Production and air-gapped deployments should run the installer while building th
 
 Binary lookup follows `Options.BinaryPath`, `MONTY_BIN`, the versioned runtime cache, `PATH`, an installed `@pydantic/monty-*` platform package, then a nearby Cargo `target` directory. Snapshot stores should retain the path returned by `Install` with the dump metadata and pass it as `BinaryPath` when restoring, because Monty dumps require a compatible runtime. The supported installer targets are macOS ARM64/x64, Linux ARM64/x64 using glibc, and Windows x64.
 
-## Upgrading to v0.5.0
-
-Monty 0.0.23 requires protocol v2; older worker binaries are incompatible. Run
-`monty-install` again and update any explicit `BinaryPath` or `MONTY_BIN` override.
-Retain the old worker when restoring snapshots created by an earlier runtime.
-
-Protocol v2 replaces the old dataclass wire format with `ClassInstance`, including
-class metadata, instance/class UUIDs, and attributes. `Dataclass` and
-`InstanceType` remain available for source compatibility but are rejected as
-execution inputs. Use dictionaries or ordinary Go structs for host inputs.
-Class results are output-only; host object methods and lazy attributes are not
-exposed. `Time` now preserves `datetime.time` values, including offsets and fold.
-
 ## Basic usage
 
 ```go
@@ -199,7 +186,7 @@ Run all fuzz targets locally (CI also runs these on pushes, PRs, and weekly):
 ```bash
 for target in FuzzNumericValueConversion FuzzPrimitiveValueConversion \
   FuzzStructuredValueConversion FuzzDecodeNestedResult FuzzDecodeArbitraryResult \
-  FuzzMalformedProtocolDecoders FuzzProtocolV2Time \
+  FuzzMalformedProtocolDecoders FuzzTimeValueRoundTrip \
   FuzzArenaGraph FuzzArenaRoundTrip FuzzArenaMalformed
 do
   go test -run '^$' -fuzz "^${target}$" -fuzztime=60s .

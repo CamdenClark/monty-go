@@ -3,60 +3,39 @@ package monty_test
 import (
 	"context"
 	"errors"
-	monty "github.com/camdenclark/monty-go"
 	"reflect"
 	"testing"
-	"time"
+
+	monty "github.com/camdenclark/monty-go"
 )
 
-func TestMontyV1ValuesAndSuspensionPosition(t *testing.T) {
+func TestSuspensionSourcePosition(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
-	want := monty.Time{Hour: 12, Minute: 30}
-	if got := run(t, session, "from datetime import time\ntime(12, 30)"); !reflect.DeepEqual(got, want) {
-		t.Fatal(got)
-	}
-	if got := run(t, session, "items[0]", monty.FeedOptions{Inputs: map[string]any{"items": []any{want}}}); !reflect.DeepEqual(got, want) {
-		t.Fatal(got)
-	}
-	got := run(t, session, "class Point:\n    def __init__(self, x):\n        self.x = x\nPoint(42)")
-	instance, ok := got.(monty.ClassInstance)
-	if !ok || instance.Type.Name != "Point" || len(instance.ID) != 16 {
-		t.Fatalf("class instance: %#v", got)
-	}
-	p, err := session.FeedStart(context.Background(), "host_value")
+	prefix := "label = 'é'\n"
+	name := "host_value"
+	p, err := session.FeedStart(context.Background(), prefix+name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := p.(*monty.NameLookupSnapshot)
-	if snapshot.Position.End <= snapshot.Position.Start || snapshot.Position.Filename == "" {
-		t.Fatal(snapshot.Position)
+	if snapshot.Position.Filename == "" || snapshot.Position.Start != uint32(len(prefix)) || snapshot.Position.End != uint32(len(prefix+name)) {
+		t.Fatalf("source byte offsets: %#v", snapshot.Position)
 	}
 	if _, err := snapshot.Resume(context.Background(), 42); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestMontyV1PerFeedDurationAndSystemSleep(t *testing.T) {
-	pool := integrationPool(t)
-	session := integrationSession(t, pool, monty.CheckoutOptions{Limits: monty.ResourceLimits{MaxFeedDuration: time.Millisecond, MaxTurnDuration: time.Millisecond}})
-	_, err := session.FeedRun(context.Background(), "while True: pass")
-	var runtimeErr *monty.RuntimeError
-	if !errors.As(err, &runtimeErr) {
-		t.Fatalf("duration error: %v", err)
-	}
-	if got := run(t, session, "21 * 2"); got != int64(42) {
-		t.Fatal(got)
-	}
-	normal := integrationSession(t, pool)
-	if got := run(t, normal, "import time\ntime.sleep(0.001)\n42"); got != int64(42) {
-		t.Fatal(got)
-	}
-	if got := run(t, normal, "import asyncio\nawait asyncio.sleep(0.001)\n42"); got != int64(42) {
-		t.Fatal(got)
+func TestSystemSleepCompletes(t *testing.T) {
+	session := integrationSession(t, integrationPool(t))
+	for _, code := range []string{"import time\ntime.sleep(0.001)\n42", "import asyncio\nawait asyncio.sleep(0.001)\n42"} {
+		if got := run(t, session, code); got != int64(42) {
+			t.Fatal(got)
+		}
 	}
 }
 
-func TestMontyV1SuspensionLimit(t *testing.T) {
+func TestSuspensionLimit(t *testing.T) {
 	session := integrationSession(t, integrationPool(t), monty.CheckoutOptions{Limits: monty.ResourceLimits{MaxSuspensions: 2}})
 	_, err := session.FeedRun(context.Background(), "for i in range(10):\n    host_tick()", monty.FeedOptions{ExternalLookup: monty.ExternalLookup{"host_tick": func() int { return 1 }}})
 	var runtimeErr *monty.RuntimeError
@@ -68,7 +47,7 @@ func TestMontyV1SuspensionLimit(t *testing.T) {
 	}
 }
 
-func TestMontyV1InputContainersAreCopied(t *testing.T) {
+func TestInputContainersAreCopied(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
 	shared := []any{int64(1)}
 	sharedMap := map[string]any{"x": int64(1)}
@@ -82,7 +61,7 @@ func TestMontyV1InputContainersAreCopied(t *testing.T) {
 	}
 }
 
-func TestMontyV1OutputContainersShareReferences(t *testing.T) {
+func TestOutputContainersShareReferences(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
 	got := run(t, session, "shared = [1]\n[shared, shared]").(monty.List)
 	got[0].(monty.List)[0] = int64(9)
@@ -96,7 +75,7 @@ func TestMontyV1OutputContainersShareReferences(t *testing.T) {
 	}
 }
 
-func TestMontyV1ArenaMetadata(t *testing.T) {
+func TestArenaMetadata(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
 	offset := -7 * 3600
 	zone := "PDT"

@@ -164,7 +164,7 @@ func FuzzStructuredValueConversion(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Exercise protocol v2 class identities and nested attributes using the
+		// Exercise the internal recursive class codec using the
 		// same conversion oracle as ordinary dictionaries.
 		_, attrs, err := consumeSingleField(wire)
 		if err != nil {

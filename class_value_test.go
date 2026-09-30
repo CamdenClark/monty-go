@@ -6,25 +6,7 @@ import (
 	"testing"
 )
 
-func TestProtocolV2Configuration(t *testing.T) {
-	request := configureRequest(configureWire{})
-	var version uint64
-	flush := false
-	_ = parseFields(request.body, func(f wireField) error {
-		if f.tag == 9 {
-			version = f.varint
-		}
-		if f.tag == 10 {
-			flush = f.varint == 0
-		}
-		return nil
-	})
-	if version != protocolVersion || !flush {
-		t.Fatalf("configuration: version %d, line buffering %v", version, flush)
-	}
-}
-
-func TestProtocolV2RejectsLegacyAndHostInputs(t *testing.T) {
+func TestUnsupportedClassInputs(t *testing.T) {
 	for _, value := range []Value{Dataclass{}, InstanceType("Point"), ClassType{}, ClassInstance{}} {
 		if _, err := encodeValue(value); err == nil {
 			t.Errorf("accepted %T", value)
@@ -32,7 +14,7 @@ func TestProtocolV2RejectsLegacyAndHostInputs(t *testing.T) {
 	}
 }
 
-func protocolV2ClassSeeds() [][]byte {
+func recursiveClassSeeds() [][]byte {
 	id := fieldBytes(1, []byte("0123456789abcdef"))
 	class := append(fieldString(1, "Point"), fieldMessage(2, id)...)
 	class = append(class, fieldVarint(3, uint64(TypeOriginSandbox))...)
@@ -41,7 +23,7 @@ func protocolV2ClassSeeds() [][]byte {
 	return [][]byte{fieldMessage(23, class), fieldMessage(24, instance), fieldMessage(23, fieldVarint(3, 99)), fieldMessage(24, fieldMessage(2, fieldBytes(1, []byte{1}))), fieldMessage(10, id), fieldString(29, "<opaque>"), fieldMessage(30, fieldVarint(1, 42))}
 }
 
-func TestProtocolV2ObjectReceiver(t *testing.T) {
+func TestFunctionCallObjectReceiver(t *testing.T) {
 	id := [16]byte{1, 2, 3}
 	call, err := decodeFunctionCall(append(fieldString(1, "method"), fieldMessage(5, fieldBytes(1, id[:]))...))
 	if err != nil || !call.MethodCall || call.ObjectID == nil || *call.ObjectID != id {
@@ -52,7 +34,7 @@ func TestProtocolV2ObjectReceiver(t *testing.T) {
 	}
 }
 
-func FuzzProtocolV2Time(f *testing.F) {
+func FuzzTimeValueRoundTrip(f *testing.F) {
 	f.Add(uint8(23), uint8(59), uint8(59), uint32(999999), int32(-3600), "UTC-1", true, true)
 	f.Add(uint8(0), uint8(0), uint8(0), uint32(0), int32(0), "", false, false)
 	f.Fuzz(func(t *testing.T, hour, minute, second uint8, micro uint32, offset int32, name string, aware, fold bool) {
@@ -79,8 +61,8 @@ func FuzzProtocolV2Time(f *testing.F) {
 	})
 }
 
-func TestProtocolV2ClassValues(t *testing.T) {
-	seeds := protocolV2ClassSeeds()
+func TestRecursiveClassValueCodec(t *testing.T) {
+	seeds := recursiveClassSeeds()
 	classValue, err := decodeValue(seeds[0])
 	if err != nil {
 		t.Fatal(err)

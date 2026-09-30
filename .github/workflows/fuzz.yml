@@ -31,7 +31,7 @@ jobs:
             FuzzDecodeNestedResult \
             FuzzDecodeArbitraryResult \
             FuzzMalformedProtocolDecoders \
-            FuzzProtocolV2Time \
+            FuzzTimeValueRoundTrip \
             FuzzArenaGraph \
             FuzzArenaRoundTrip \
             FuzzArenaMalformed

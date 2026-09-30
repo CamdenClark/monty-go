@@ -206,7 +206,14 @@ results[0] + results[1]`, monty.FeedOptions{ExternalLookup: monty.ExternalLookup
 				return 0, ctx.Err()
 			}
 		}),
-		"fast":         monty.Async(func() int { <-slowStarted; return 42 }),
+		"fast": monty.Async(func(ctx context.Context) (int, error) {
+			select {
+			case <-slowStarted:
+				return 42, nil
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+		}),
 		"release_slow": func() { close(releaseSlow) },
 	}})
 	if err != nil || !reflect.DeepEqual(got, int64(83)) {
@@ -264,7 +271,14 @@ result`, monty.FeedOptions{ExternalLookup: monty.ExternalLookup{
 			close(stopped)
 			return 0, ctx.Err()
 		}),
-		"fail": monty.Async(func() error { <-started; return &monty.HostError{Type: "ValueError", Message: "failed"} }),
+		"fail": monty.Async(func(ctx context.Context) error {
+			select {
+			case <-started:
+				return &monty.HostError{Type: "ValueError", Message: "failed"}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}),
 	}})
 	if err != nil || got != int64(42) {
 		t.Fatalf("feed completion: %#v %v", got, err)
