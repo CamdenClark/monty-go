@@ -13,7 +13,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       MONTY_REQUIRE_INTEGRATION: '1'
-      MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
