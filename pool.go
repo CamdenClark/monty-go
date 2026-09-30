@@ -37,13 +37,18 @@ type Options struct {
 	MaxCheckoutsPerWorker        int
 }
 
-// ResourceLimits apply to an entire session. Zero means unlimited, except
-// Monty's own default recursion limit still applies.
+// ResourceLimits configure session memory limits and execution budgets.
+// Zero leaves the worker default in place; durations default to unlimited.
 type ResourceLimits struct {
+	// MaxDuration is a cumulative host-enforced session budget.
 	MaxDuration       time.Duration
+	MaxFeedDuration   time.Duration
+	MaxTurnDuration   time.Duration
 	MaxMemory         uint64
 	GCInterval        uint64
 	MaxRecursionDepth uint64
+	// MaxSuspensions bounds host round trips per feed; zero uses Monty's default of 1000.
+	MaxSuspensions uint64
 }
 
 // TypeCheckFormat selects ty's diagnostic rendering.
@@ -352,7 +357,7 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if grace == 0 {
 		grace = time.Second
 	}
-	return &Session{pool: p, worker: w, scriptName: o.ScriptName, maxDuration: o.Limits.MaxDuration, durationGrace: grace, durationBackstop: !p.options.DisableDurationLimitBackstop}, nil
+	return &Session{pool: p, worker: w, scriptName: o.ScriptName, maxDuration: o.Limits.MaxDuration, maxSuspensions: o.Limits.MaxSuspensions, durationGrace: grace, durationBackstop: !p.options.DisableDurationLimitBackstop}, nil
 }
 func normalizeAnnotations(x any) (*uint32, error) {
 	if x == nil {
@@ -527,15 +532,19 @@ func (w *worker) exchange(ctx context.Context, req request, onPrint PrintCallbac
 			}
 			if event.kind == eventPrint {
 				if callbackErr == nil {
-					p := decodePrint(event.body)
-					if onPrint != nil {
-						callbackErr = onPrint(p.Stream, p.Text)
-					} else {
-						target := os.Stdout
-						if p.Stream == Stderr {
-							target = os.Stderr
+					for _, p := range decodePrintSegments(event.body) {
+						if callbackErr != nil {
+							break
 						}
-						_, callbackErr = io.WriteString(target, p.Text)
+						if onPrint != nil {
+							callbackErr = onPrint(p.Stream, p.Text)
+						} else {
+							target := os.Stdout
+							if p.Stream == Stderr {
+								target = os.Stderr
+							}
+							_, callbackErr = io.WriteString(target, p.Text)
+						}
 					}
 				}
 				continue

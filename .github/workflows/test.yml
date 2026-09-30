@@ -6,18 +6,25 @@ on:
 
 jobs:
   go-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      MONTY_REQUIRE_INTEGRATION: '1'
+      MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
-      - name: Test automatic runtime installation
+      - name: Clean-cache installation and examples smoke test
         env:
           MONTY_AUTO_INSTALL_TEST: '1'
           MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
         run: go test -run '^TestIntegrationAutoInstall$' .
-      - name: Test installer command reuse
+      - name: Provision pinned runtime
         env:
           MONTY_CACHE_DIR: ${{ runner.temp }}/monty-go-cache
         run: go run ./cmd/monty-install

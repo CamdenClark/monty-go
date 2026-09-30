@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 )
 
 type fuzzDecodedProfile struct {
@@ -195,6 +196,7 @@ func fuzzBoundaryValue(data []byte, depth int) Value {
 // tags, lengths, or truncated frames.
 func FuzzMalformedProtocolDecoders(f *testing.F) {
 	f.Add([]byte{})
+	f.Add(encodeSnapshot([]byte("opaque"), snapshotMetadata{duration: time.Second, suspensions: 42}))
 	f.Add([]byte{0})
 	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01})
 	f.Add([]byte{0x0a, 0x03, 'a'})
@@ -225,15 +227,20 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 		f.Add(wire)
 	}
 
-	valueWire, err := encodeValue(Dict{{Key: "ok", Value: true}})
+	a := arenaEncoder{}
+	root, err := a.add(Dict{{Key: "ok", Value: true}})
 	if err != nil {
 		f.Fatal(err)
 	}
-	printBody := append(fieldVarint(1, uint64(Stdout)), fieldString(2, "hello")...)
-	callBody := append(fieldString(1, "callback"), fieldMessage(2, valueWire)...)
+	valueWire := a.encode()
+	f.Add(valueWire)
+	printBody := fieldMessage(1, append(fieldVarint(1, uint64(Stdout)), fieldString(2, "hello")...))
+	callBody := append(fieldString(1, "callback"), fieldVarint(2, uint64(root))...)
 	callBody = append(callBody, fieldVarint(4, 7)...)
-	osBody := fieldMessage(21, append(fieldString(1, "KEY"), fieldMessage(2, valueWire)...))
-	completeBody := fieldMessage(1, valueWire)
+	callBody = append(callBody, fieldMessage(7, valueWire)...)
+	osBody := fieldMessage(21, append(fieldString(1, "KEY"), fieldVarint(2, uint64(root))...))
+	osBody = append(osBody, fieldMessage(50, valueWire)...)
+	completeBody := append(fieldVarint(1, uint64(root)), fieldMessage(2, valueWire)...)
 	raisedBody := encodeRaised(RaisedException{Type: "ValueError", Message: "bad value"})
 	errorBody := fieldMessage(1, raisedBody)
 	protocolBodies := [][]byte{printBody, callBody, osBody, completeBody, raisedBody, errorBody}
@@ -285,6 +292,9 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 		_, _ = decodeClassInstance(data)
 		_, _ = decodeUUID(data)
 		_ = decodeTime(data)
+		_, _, _ = decodeSnapshot(data)
+		_, _ = decodeArena(data)
+		_ = decodePrintSegments(data)
 		_, _ = decodeEvent(data)
 		_ = decodePrint(data)
 		_, _ = decodeFunctionCall(data)

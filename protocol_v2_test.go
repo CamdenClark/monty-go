@@ -1,6 +1,7 @@
 package monty
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestProtocolV2Configuration(t *testing.T) {
 		}
 		return nil
 	})
-	if version != 2 || !flush {
+	if version != protocolVersion || !flush {
 		t.Fatalf("configuration: version %d, line buffering %v", version, flush)
 	}
 }
@@ -101,9 +102,10 @@ func TestProtocolV2ClassValues(t *testing.T) {
 			t.Errorf("accepted malformed or unsupported value %x", seed)
 		}
 	}
-	state := &runState{}
+	state := newRunState(&Session{}, FeedOptions{})
+	defer state.cancel()
 	id := [16]byte{1}
-	progress, err := state.progress(childEvent{kind: eventNameLookup, body: append(fieldString(1, "value"), fieldMessage(2, fieldBytes(1, id[:]))...)})
+	progress, err := state.progress(context.Background(), childEvent{kind: eventNameLookup, body: append(fieldString(1, "value"), fieldMessage(2, fieldBytes(1, id[:]))...)})
 	if err != nil {
 		t.Fatal(err)
 	}

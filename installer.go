@@ -18,7 +18,7 @@ import (
 )
 
 // RuntimeVersion is the version of the Monty worker installed by this wrapper.
-const RuntimeVersion = "0.0.23"
+const RuntimeVersion = "1.0.0"
 
 // CacheDirEnv overrides the directory used for installed Monty runtimes.
 const CacheDirEnv = "MONTY_CACHE_DIR"
@@ -52,41 +52,41 @@ var runtimeArtifacts = map[string]runtimeArtifact{
 	"darwin/arm64": {
 		goos:          "darwin",
 		goarch:        "arm64",
-		url:           "https://registry.npmjs.org/@pydantic/monty-darwin-arm64/-/monty-darwin-arm64-0.0.23.tgz",
-		archiveSHA256: "db716f7901787b8837d8e60b41ea1620c7be319c23bd82ddb06ccf8140c428ba",
-		binarySHA256:  "885b3cd1aec85463855fc6366614a0304f3a3689ad4b67a01cb2364d86cf6e6f",
+		url:           "https://registry.npmjs.org/@pydantic/monty-darwin-arm64/-/monty-darwin-arm64-1.0.0.tgz",
+		archiveSHA256: "ffaa848257a454dd84d5a6267af6d3f9ad971c5c848246aa266111ea91ad5d5a",
+		binarySHA256:  "96e063ddcb0efa6cab401503671b6209a33d9657e3cab626445de708c5b84cce",
 		member:        "package/monty",
 	},
 	"darwin/amd64": {
 		goos:          "darwin",
 		goarch:        "amd64",
-		url:           "https://registry.npmjs.org/@pydantic/monty-darwin-x64/-/monty-darwin-x64-0.0.23.tgz",
-		archiveSHA256: "621eefcf902d320d97fe07ac29e1f4690aa288f1e517206754d0caa3501f30fb",
-		binarySHA256:  "62dbefa05185840f236f346cfd36ce41fe85687865736d1b89374a44b6cd3189",
+		url:           "https://registry.npmjs.org/@pydantic/monty-darwin-x64/-/monty-darwin-x64-1.0.0.tgz",
+		archiveSHA256: "fa61ffebe87bad0e900e136ce744abefcba8d5a158b824c7f90bdadb68ede4b4",
+		binarySHA256:  "a1996e5f24ca6cd1a1107843940cddaf7b296737345961108d02919201cca7e4",
 		member:        "package/monty",
 	},
 	"linux/arm64": {
 		goos:          "linux",
 		goarch:        "arm64",
-		url:           "https://registry.npmjs.org/@pydantic/monty-linux-arm64-gnu/-/monty-linux-arm64-gnu-0.0.23.tgz",
-		archiveSHA256: "215da32cc02c6ce1fe96fd7cf2535eb6b451004abc0a088deb0ca8bdc84eebad",
-		binarySHA256:  "5a329931f511ca19835a0609f2481a89315e66f09252abb83d0fd0a64bbbf06e",
+		url:           "https://registry.npmjs.org/@pydantic/monty-linux-arm64-gnu/-/monty-linux-arm64-gnu-1.0.0.tgz",
+		archiveSHA256: "8f3a3ea853ff2ad5e2ee6bc3af262825eb305b535aa97252e685a4d52da59ec6",
+		binarySHA256:  "e779f18e3e114233290ab0d4ad7a8c6b60b7dbbf48f8792fabdeaefca51bf4ca",
 		member:        "package/monty",
 	},
 	"linux/amd64": {
 		goos:          "linux",
 		goarch:        "amd64",
-		url:           "https://registry.npmjs.org/@pydantic/monty-linux-x64-gnu/-/monty-linux-x64-gnu-0.0.23.tgz",
-		archiveSHA256: "ab57ed8a7e7b1b7bc033276a4d66e299a0ed4a50e6ac4adb4cb8050afe2c0920",
-		binarySHA256:  "b634e4fe49bdd2f933e2f5ecf32633db4273107a3a693946a4e3c9b0d01ba45a",
+		url:           "https://registry.npmjs.org/@pydantic/monty-linux-x64-gnu/-/monty-linux-x64-gnu-1.0.0.tgz",
+		archiveSHA256: "251d951b42583c9c34235d8fee13b7220e6c5c869e0c648dcfd5c0fe2b6568cc",
+		binarySHA256:  "b1eb33f353001f9d6c7dce85addb1ee32a221e0feda2f3e3f1125bedee16c966",
 		member:        "package/monty",
 	},
 	"windows/amd64": {
 		goos:          "windows",
 		goarch:        "amd64",
-		url:           "https://registry.npmjs.org/@pydantic/monty-win32-x64-msvc/-/monty-win32-x64-msvc-0.0.23.tgz",
-		archiveSHA256: "9903a81765dbddf17d87dd5fd7d5595fde909748830616363e34715597badf8b",
-		binarySHA256:  "87d34dc143f960dfd10cb94e59262028559907e31b52b4c80990a7a20dec5c43",
+		url:           "https://registry.npmjs.org/@pydantic/monty-win32-x64-msvc/-/monty-win32-x64-msvc-1.0.0.tgz",
+		archiveSHA256: "ca1c25bdffacc6c83a828cfe9eeaf43e08b8c627d50b9ea3059ec0cff34581f4",
+		binarySHA256:  "932aad2c0b416b4799107a6ae825553da6cf38bba3f2bb1e32c84a7055118553",
 		member:        "package/monty.exe",
 	},
 }

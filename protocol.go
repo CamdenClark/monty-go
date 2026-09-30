@@ -2,6 +2,7 @@ package monty
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -19,6 +20,7 @@ const (
 	reqLoad          requestKind = 8
 	reqReset         requestKind = 9
 	reqShutdown      requestKind = 10
+	reqAbortFeed     requestKind = 11
 )
 
 type request struct {
@@ -61,8 +63,14 @@ func configureRequest(x configureWire) request {
 
 func encodeLimits(x ResourceLimits) []byte {
 	b := []byte{}
-	if x.MaxDuration > 0 {
-		b = append(b, fieldVarint(1, uint64(x.MaxDuration/time.Microsecond))...)
+	if x.MaxFeedDuration > 0 {
+		b = append(b, fieldVarint(6, uint64(x.MaxFeedDuration/time.Microsecond))...)
+	}
+	if x.MaxTurnDuration > 0 {
+		b = append(b, fieldVarint(7, uint64(x.MaxTurnDuration/time.Microsecond))...)
+	}
+	if x.MaxSuspensions > 0 {
+		b = append(b, fieldVarint(5, x.MaxSuspensions)...)
 	}
 	if x.MaxMemory > 0 {
 		b = append(b, fieldVarint(2, x.MaxMemory)...)
@@ -83,15 +91,17 @@ func feedRequest(code string, inputs map[string]Value, skip bool) (request, erro
 		names = append(names, k)
 	}
 	sort.Strings(names)
+	a := arenaEncoder{}
 	for _, name := range names {
-		value, err := encodeValue(inputs[name])
+		value, err := a.add(inputs[name])
 		if err != nil {
 			return request{}, fmt.Errorf("input %q: %w", name, err)
 		}
-		named := append(fieldString(1, name), fieldMessage(2, value)...)
+		named := append(fieldString(1, name), fieldVarint(2, uint64(value))...)
 		b = append(b, fieldMessage(2, named)...)
 	}
-	b = append(b, fieldBool(3, skip)...)
+	b = append(b, fieldMessage(3, a.encode())...)
+	b = append(b, fieldBool(4, skip)...)
 	return request{reqFeed, b}, nil
 }
 
@@ -103,7 +113,7 @@ type resumeResult struct {
 	notHandled bool
 }
 
-func encodeResumeResult(x resumeResult) ([]byte, error) {
+func encodeResumeResultArena(x resumeResult, a *arenaEncoder) ([]byte, error) {
 	if x.err != nil {
 		return fieldMessage(2, encodeRaised(*x.err)), nil
 	}
@@ -116,27 +126,29 @@ func encodeResumeResult(x resumeResult) ([]byte, error) {
 	if x.notHandled {
 		return fieldMessage(5, nil), nil
 	}
-	v, err := encodeValue(x.value)
+	v, err := a.add(x.value)
 	if err != nil {
 		return nil, err
 	}
-	return fieldMessage(1, v), nil
+	return fieldVarint(1, uint64(v)), nil
 }
 func resumeCallRequest(callID uint32, result resumeResult) (request, error) {
-	r, err := encodeResumeResult(result)
+	a := arenaEncoder{}
+	r, err := encodeResumeResultArena(result, &a)
 	if err != nil {
 		return request{}, err
 	}
-	return request{reqResumeCall, append(fieldVarint(1, uint64(callID)), fieldMessage(2, r)...)}, nil
+	return request{reqResumeCall, append(fieldVarint(1, uint64(callID)), append(fieldMessage(2, r), fieldMessage(3, a.encode())...)...)}, nil
 }
 func resumeNameValueRequest(value Value) (request, error) {
-	v, err := encodeValue(value)
+	a := arenaEncoder{}
+	v, err := a.add(value)
 	if err != nil {
 		return request{}, err
 	}
-	return request{reqResumeName, fieldMessage(1, v)}, nil
+	return request{reqResumeName, append(fieldMessage(1, a.encode()), fieldVarint(2, uint64(v))...)}, nil
 }
-func resumeNameUndefinedRequest() request { return request{reqResumeName, fieldMessage(2, nil)} }
+func resumeNameUndefinedRequest() request { return request{reqResumeName, fieldMessage(3, nil)} }
 
 type futureWireResult struct {
 	callID uint32
@@ -145,14 +157,16 @@ type futureWireResult struct {
 
 func resumeFuturesRequest(results []futureWireResult) (request, error) {
 	b := []byte{}
+	a := arenaEncoder{}
 	for _, x := range results {
-		r, err := encodeResumeResult(x.result)
+		r, err := encodeResumeResultArena(x.result, &a)
 		if err != nil {
 			return request{}, err
 		}
 		item := append(fieldVarint(1, uint64(x.callID)), fieldMessage(2, r)...)
 		b = append(b, fieldMessage(1, item)...)
 	}
+	b = append(b, fieldMessage(2, a.encode())...)
 	return request{reqResumeFutures, b}, nil
 }
 func encodeRaised(x RaisedException) []byte {
@@ -198,7 +212,7 @@ type childEvent struct {
 	kind                 eventKind
 	body                 []byte
 	totalExecutionMicros uint64
-	maxDurationMicros    *uint64
+	maxSuspensions       *uint64
 	restoredScriptName   *string
 }
 
@@ -215,10 +229,10 @@ func decodeEvent(data []byte) (childEvent, error) {
 			switch f.tag {
 			case 20:
 				e.totalExecutionMicros = f.varint
-			case 21:
-				v := f.varint
-				e.maxDurationMicros = &v
 			case 22:
+				v := f.varint
+				e.maxSuspensions = &v
+			case 23:
 				v := string(f.bytes)
 				e.restoredScriptName = &v
 			}
@@ -254,6 +268,7 @@ func decodePrint(data []byte) printEvent {
 }
 
 type callEvent struct {
+	Position   SourceRange
 	Name       string
 	Args       []Value
 	Kwargs     Dict
@@ -264,34 +279,30 @@ type callEvent struct {
 }
 
 func decodeFunctionCall(data []byte) (callEvent, error) {
-	var x callEvent
-	err := parseFields(data, func(f wireField) error {
+	x := callEvent{Name: decodeStringField(data, 1), Position: decodeSourceRange(decodeBytesField(data, 8))}
+	values, err := messageArena(data, 7)
+	if err != nil {
+		return x, err
+	}
+	ids, err := indexes(data, 2)
+	if err != nil {
+		return x, err
+	}
+	for _, i := range ids {
+		v, err := arenaRef(values, i)
+		if err != nil {
+			return x, err
+		}
+		x.Args = append(x.Args, v)
+	}
+	err = parseFields(data, func(f wireField) error {
 		switch f.tag {
-		case 1:
-			x.Name = string(f.bytes)
-		case 2:
-			v, e := decodeValue(f.bytes)
-			if e != nil {
-				return e
-			}
-			x.Args = append(x.Args, v)
 		case 3:
-			var p Pair
-			if e := parseFields(f.bytes, func(k wireField) error {
-				v, e := decodeValue(k.bytes)
-				if e != nil {
-					return e
-				}
-				if k.tag == 1 {
-					p.Key = v
-				} else if k.tag == 2 {
-					p.Value = v
-				}
-				return nil
-			}); e != nil {
-				return e
+			d, err := arenaPairs(fieldMessage(1, f.bytes), values)
+			if err != nil {
+				return err
 			}
-			x.Kwargs = append(x.Kwargs, p)
+			x.Kwargs = append(x.Kwargs, d...)
 		case 4:
 			x.CallID = uint32(f.varint)
 		case 5:
@@ -309,6 +320,7 @@ func decodeFunctionCall(data []byte) (callEvent, error) {
 func decodeOSCall(data []byte) (callEvent, error) {
 	var x callEvent
 	x.OS = true
+	x.Position = decodeSourceRange(decodeBytesField(data, 52))
 	err := parseFields(data, func(f wireField) error {
 		if f.tag == 1 {
 			x.CallID = uint32(f.varint)
@@ -438,7 +450,11 @@ func decodeOSCall(data []byte) (callEvent, error) {
 					key = string(v.bytes)
 				}
 				if v.tag == 2 {
-					def, decErr = decodeValue(v.bytes)
+					values, err := messageArena(data, 50)
+					if err != nil {
+						return err
+					}
+					def, decErr = arenaRef(values, v.varint)
 				}
 				return decErr
 			})
@@ -451,6 +467,37 @@ func decodeOSCall(data []byte) (callEvent, error) {
 			x.Name = "os.environ"
 		case 23:
 			x.Name = "date.today"
+		case 25:
+			var size uint64
+			if err := parseFields(f.bytes, func(v wireField) error {
+				if v.tag == 1 {
+					size = v.varint
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			x.Name = "os.urandom"
+			x.Args = []Value{size}
+		case 26:
+			x.Name = "time.time"
+			x.Args = []Value{decodeStringField(f.bytes, 1)}
+		case 27, 28, 29, 30:
+			var seconds float64
+			if err := parseFields(f.bytes, func(v wireField) error {
+				if v.tag == 1 {
+					seconds = math.Float64frombits(v.fixed64)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds >= float64(math.MaxInt64)/float64(time.Second) {
+				return fmt.Errorf("invalid sleep duration")
+			}
+			names := map[int]string{27: "time.sleep", 28: "asyncio.sleep", 29: "system.sleep", 30: "system.async_sleep"}
+			x.Name = names[f.tag]
+			x.Args = []Value{seconds}
 		case 24:
 			var tz Value = nil
 			_ = parseFields(f.bytes, func(v wireField) error {
@@ -468,26 +515,21 @@ func decodeOSCall(data []byte) (callEvent, error) {
 }
 
 func decodeComplete(data []byte) (Value, error) {
-	var value Value
-	found := false
-	err := parseFields(data, func(f wireField) error {
+	values, err := messageArena(data, 2)
+	if err != nil {
+		return nil, err
+	}
+	var i uint64
+	err = parseFields(data, func(f wireField) error {
 		if f.tag == 1 {
-			v, e := decodeValue(f.bytes)
-			if e != nil {
-				return e
-			}
-			value = v
-			found = true
+			i = f.varint
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, fmt.Errorf("complete event missing value")
-	}
-	return value, nil
+	return arenaRef(values, i)
 }
 func decodeRaised(data []byte) (RaisedException, error) {
 	var x RaisedException
@@ -572,13 +614,11 @@ func decodeStringField(data []byte, tag int) string {
 	return s
 }
 func decodeUint32List(data []byte, tag int) []uint32 {
-	var out []uint32
-	_ = parseFields(data, func(f wireField) error {
-		if f.tag == tag {
-			out = append(out, uint32(f.varint))
-		}
-		return nil
-	})
+	ids, _ := indexes(data, tag)
+	out := []uint32{}
+	for _, i := range ids {
+		out = append(out, uint32(i))
+	}
 	return out
 }
 func decodeBytesField(data []byte, tag int) []byte {
@@ -590,4 +630,29 @@ func decodeBytesField(data []byte, tag int) []byte {
 		return nil
 	})
 	return out
+}
+
+func decodePrintSegments(data []byte) []printEvent {
+	var out []printEvent
+	_ = parseFields(data, func(f wireField) error {
+		if f.tag == 1 && f.type_ == 2 {
+			out = append(out, decodePrint(f.bytes))
+		}
+		return nil
+	})
+	return out
+}
+
+func decodeSourceRange(data []byte) SourceRange {
+	x := SourceRange{Filename: decodeStringField(data, 1)}
+	_ = parseFields(data, func(f wireField) error {
+		if f.tag == 2 {
+			x.Start = uint32(f.varint)
+		}
+		if f.tag == 3 {
+			x.End = uint32(f.varint)
+		}
+		return nil
+	})
+	return x
 }

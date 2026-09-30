@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	protocolVersion = 2
+	protocolVersion = 5
 	maxFrameLen     = 256 << 20
 )
 

@@ -76,10 +76,10 @@ func TestHostFunctionReturnsArbitraryPrecisionInteger(t *testing.T) {
 
 func TestDynamicHostFunctionReceivesKeywordArguments(t *testing.T) {
 	session := integrationSession(t, integrationPool(t))
-	lookup := monty.ExternalLookup{"format": monty.HostFunc(func(_ context.Context, args []any, kwargs monty.Kwargs) (any, error) {
+	lookup := monty.ExternalLookup{"host_format": monty.HostFunc(func(_ context.Context, args []any, kwargs monty.Kwargs) (any, error) {
 		return args[0].(string) + kwargs["suffix"].(string), nil
 	})}
-	if got := run(t, session, "format('answer', suffix=':42')", monty.FeedOptions{ExternalLookup: lookup}); got != "answer:42" {
+	if got := run(t, session, "host_format('answer', suffix=':42')", monty.FeedOptions{ExternalLookup: lookup}); got != "answer:42" {
 		t.Fatalf("got %#v", got)
 	}
 }

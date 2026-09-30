@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,6 +48,7 @@ type Session struct {
 	inTurn           bool
 	pending          *runState
 	maxDuration      time.Duration
+	maxSuspensions   uint64
 	execution        time.Duration
 	durationGrace    time.Duration
 	durationBackstop bool
@@ -74,10 +76,10 @@ func (s *Session) executionExchange(ctx context.Context, req request, print Prin
 	return e, err
 }
 func (s *Session) observeEvent(e childEvent) {
-	s.execution = time.Duration(e.totalExecutionMicros) * time.Microsecond
-	if e.maxDurationMicros != nil {
-		s.maxDuration = time.Duration(*e.maxDurationMicros) * time.Microsecond
+	if e.maxSuspensions != nil {
+		s.maxSuspensions = *e.maxSuspensions
 	}
+	s.execution = time.Duration(e.totalExecutionMicros) * time.Microsecond
 }
 
 // Close resets the worker and returns it to the pool. It is idempotent.
@@ -92,6 +94,9 @@ func (s *Session) Close() error {
 		return errors.New("cannot close a Monty session during an active protocol turn")
 	}
 	s.closed = true
+	if s.pending != nil {
+		s.pending.cancel()
+	}
 	s.pending = nil
 	s.mu.Unlock()
 	ctx := context.Background()
@@ -123,14 +128,25 @@ type Snapshot interface {
 }
 
 type runState struct {
-	session *Session
-	options FeedOptions
-	futures map[uint32]<-chan futureOutcome
-	step    uint64
+	session     *Session
+	options     FeedOptions
+	futures     map[uint32]<-chan futureOutcome
+	step        uint64
+	suspensions uint64
+	restoring   bool
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func newRunState(session *Session, options FeedOptions) *runState {
-	return &runState{session: session, options: options, futures: make(map[uint32]<-chan futureOutcome)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &runState{session: session, options: options, futures: make(map[uint32]<-chan futureOutcome), ctx: ctx, cancel: cancel}
+}
+
+func (r *runState) callbackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	callbackCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(r.ctx, cancel)
+	return callbackCtx, func() { stop(); cancel() }
 }
 
 type futureOutcome struct {
@@ -138,8 +154,15 @@ type futureOutcome struct {
 	err   error
 }
 
+// SourceRange identifies a suspension using UTF-8 byte offsets, with End exclusive.
+type SourceRange struct {
+	Filename   string
+	Start, End uint32
+}
+
 // FunctionSnapshot is an external or OS call suspension.
 type FunctionSnapshot struct {
+	Position     SourceRange
 	state        *runState
 	step         uint64
 	used         atomic.Bool
@@ -157,10 +180,11 @@ func (*FunctionSnapshot) isProgress() {}
 
 // NameLookupSnapshot is an unresolved global-name suspension.
 type NameLookupSnapshot struct {
-	state *runState
-	step  uint64
-	used  atomic.Bool
-	Name  string
+	Position SourceRange
+	state    *runState
+	step     uint64
+	used     atomic.Bool
+	Name     string
 	// ObjectID is set for an attribute lookup; automatic resolution denies it.
 	ObjectID *[16]byte
 }
@@ -169,6 +193,7 @@ func (*NameLookupSnapshot) isProgress() {}
 
 // FutureSnapshot means all sandbox tasks are waiting for host futures.
 type FutureSnapshot struct {
+	Position       SourceRange
 	state          *runState
 	step           uint64
 	used           atomic.Bool
@@ -218,9 +243,10 @@ func (s *Session) FeedStart(ctx context.Context, code string, options ...FeedOpt
 	defer s.mu.Unlock()
 	s.inTurn = false
 	if err != nil {
+		state.cancel()
 		return nil, err
 	}
-	p, err := state.progress(e)
+	p, err := state.progress(ctx, e)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +277,30 @@ func (s *Session) FeedRun(ctx context.Context, code string, options ...FeedOptio
 	}
 }
 
-func (r *runState) progress(e childEvent) (Progress, error) {
+func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error) {
+	if e.kind == eventComplete || e.kind >= eventError {
+		r.cancel()
+	}
+	if e.kind >= eventFunctionCall && e.kind <= eventResolveFutures {
+		if r.restoring {
+			r.restoring = false
+		} else {
+			r.suspensions++
+		}
+		limit := r.session.maxSuspensions
+		if limit == 0 {
+			limit = 1000
+		}
+		if r.suspensions > limit {
+			exception := RaisedException{Type: "RuntimeError", Message: "Monty maximum suspension count exceeded"}
+			event, err := r.session.executionExchange(ctx, request{kind: reqAbortFeed, body: fieldMessage(1, encodeRaised(exception))}, r.options.PrintCallback)
+			if err != nil {
+				r.cancel()
+				return nil, err
+			}
+			return r.progress(ctx, event)
+		}
+	}
 	switch e.kind {
 	case eventComplete:
 		v, err := decodeComplete(e.body)
@@ -265,15 +314,15 @@ func (r *runState) progress(e childEvent) (Progress, error) {
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
-		return &FunctionSnapshot{state: r, step: r.step, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall, ObjectID: c.ObjectID}, nil
+		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall, ObjectID: c.ObjectID}, nil
 	case eventOSCall:
 		c, err := decodeOSCall(e.body)
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
-		return &FunctionSnapshot{state: r, step: r.step, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, IsOSFunction: true}, nil
+		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, IsOSFunction: true}, nil
 	case eventNameLookup:
-		snapshot := &NameLookupSnapshot{state: r, step: r.step, Name: decodeStringField(e.body, 1)}
+		snapshot := &NameLookupSnapshot{state: r, step: r.step, Position: decodeSourceRange(decodeBytesField(e.body, 3)), Name: decodeStringField(e.body, 1)}
 		if err := parseFields(e.body, func(f wireField) error {
 			if f.tag == 2 {
 				id, err := decodeUUID(f.bytes)
@@ -288,7 +337,7 @@ func (r *runState) progress(e childEvent) (Progress, error) {
 		}
 		return snapshot, nil
 	case eventResolveFutures:
-		return &FutureSnapshot{state: r, step: r.step, PendingCallIDs: decodeUint32List(e.body, 1)}, nil
+		return &FutureSnapshot{state: r, step: r.step, Position: decodeSourceRange(decodeBytesField(e.body, 2)), PendingCallIDs: decodeUint32List(e.body, 1)}, nil
 	case eventError:
 		x, err := decodeErrorEvent(e.body)
 		r.session.pending = nil
@@ -335,9 +384,10 @@ func (r *runState) exchange(ctx context.Context, req request, step uint64) (Prog
 	s.inTurn = false
 	if err != nil {
 		s.pending = nil
+		r.cancel()
 		return nil, err
 	}
-	return r.progress(e)
+	return r.progress(ctx, e)
 }
 
 // Resume returns a value from a suspended function call.
@@ -413,12 +463,41 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
 	}
+	if s.IsOSFunction && (s.FunctionName == "system.sleep" || s.FunctionName == "system.async_sleep") {
+		delay := time.Duration(s.Args[0].(float64) * float64(time.Second))
+		callbackCtx, cancel := s.state.callbackContext(ctx)
+		wait := func() (Value, error) {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				return nil, nil
+			case <-callbackCtx.Done():
+				return nil, callbackCtx.Err()
+			}
+		}
+		if s.FunctionName == "system.async_sleep" {
+			ch := make(chan futureOutcome, 1)
+			go func() { defer cancel(); v, err := wait(); ch <- futureOutcome{v, err} }()
+			s.state.futures[s.CallID] = ch
+			id := s.CallID
+			return s.resume(ctx, resumeResult{future: &id})
+		}
+		defer cancel()
+		_, err := wait()
+		if err != nil {
+			return s.resumeError(ctx, err)
+		}
+		return s.resume(ctx, resumeResult{})
+	}
 	if s.IsOSFunction {
 		handler := s.state.options.OS
 		if handler == nil {
 			return s.resume(ctx, resumeResult{notHandled: true})
 		}
-		value, err := handler(ctx, s.FunctionName, s.Args, mustKwargs(s.Kwargs))
+		callbackCtx, cancel := s.state.callbackContext(ctx)
+		defer cancel()
+		value, err := handler(callbackCtx, s.FunctionName, s.Args, mustKwargs(s.Kwargs))
 		if err != nil {
 			return s.resumeError(ctx, err)
 		}
@@ -435,14 +514,17 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		return s.resumeError(ctx, &HostError{Type: "NameError", Message: "external function not found: " + s.FunctionName})
 	}
 	if _, async := fn.(AsyncFunction); !async {
-		value, err := callHost(ctx, fn, s.Args, s.Kwargs)
+		callbackCtx, cancel := s.state.callbackContext(ctx)
+		defer cancel()
+		value, err := callHost(callbackCtx, fn, s.Args, s.Kwargs)
 		if err != nil {
 			return s.resumeError(ctx, err)
 		}
 		return s.resume(ctx, resumeResult{value: value})
 	}
 	ch := make(chan futureOutcome, 1)
-	go func() { v, e := callHost(ctx, fn, s.Args, s.Kwargs); ch <- futureOutcome{v, e} }()
+	callbackCtx, cancel := s.state.callbackContext(ctx)
+	go func() { defer cancel(); v, e := callHost(callbackCtx, fn, s.Args, s.Kwargs); ch <- futureOutcome{v, e} }()
 	s.state.futures[s.CallID] = ch
 	id := s.CallID
 	return s.resume(ctx, resumeResult{future: &id})
@@ -507,23 +589,47 @@ func (s *FutureSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
 	}
-	results := make([]futureWireResult, 0, len(s.PendingCallIDs))
+	if len(s.PendingCallIDs) == 0 {
+		return nil, &ProtocolError{Message: "worker requested no pending futures"}
+	}
+	cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}, {Dir: reflect.SelectRecv, Chan: reflect.ValueOf(s.state.ctx.Done())}}
+	ids := []uint32{}
 	for _, id := range s.PendingCallIDs {
 		ch, ok := s.state.futures[id]
 		if !ok {
 			return nil, &ProtocolError{Message: fmt.Sprintf("worker requested unknown future %d", id)}
 		}
+		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)})
+		ids = append(ids, id)
+	}
+	chosen, value, _ := reflect.Select(cases)
+	if chosen < 2 {
+		s.state.cancel()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, context.Canceled
+	}
+	results := []futureWireResult{}
+	collect := func(id uint32, outcome futureOutcome) {
+		delete(s.state.futures, id)
+		r := resumeResult{value: outcome.value}
+		if outcome.err != nil {
+			x := raisedFromError(outcome.err)
+			r.err = &x
+		}
+		results = append(results, futureWireResult{id, r})
+	}
+	collect(ids[chosen-2], value.Interface().(futureOutcome))
+	for _, id := range ids {
+		ch, ok := s.state.futures[id]
+		if !ok {
+			continue
+		}
 		select {
 		case outcome := <-ch:
-			delete(s.state.futures, id)
-			r := resumeResult{value: outcome.value}
-			if outcome.err != nil {
-				x := raisedFromError(outcome.err)
-				r.err = &x
-			}
-			results = append(results, futureWireResult{id, r})
-		case <-ctx.Done():
-			return nil, ctx.Err()
+			collect(id, outcome)
+		default:
 		}
 	}
 	req, err := resumeFuturesRequest(results)
@@ -575,7 +681,7 @@ func snapshotDump(ctx context.Context, state *runState, step uint64) ([]byte, er
 	if e.kind != eventDump {
 		return nil, eventErrorValue(e)
 	}
-	return decodeBytesField(e.body, 1), nil
+	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: session.maxDuration, suspensions: state.suspensions}), nil
 }
 func (s *FunctionSnapshot) Dump(ctx context.Context) ([]byte, error) {
 	if s.used.Load() {
@@ -616,7 +722,7 @@ func (s *Session) Dump(ctx context.Context) ([]byte, error) {
 	if e.kind != eventDump {
 		return nil, eventErrorValue(e)
 	}
-	return decodeBytesField(e.body, 1), nil
+	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: s.maxDuration}), nil
 }
 
 // InstallDependencies asks a compatible embedded-CPython worker to install
@@ -689,6 +795,10 @@ func (s *Session) LoadSnapshot(ctx context.Context, state []byte, options ...Fee
 	return snap, nil
 }
 func (s *Session) load(ctx context.Context, state []byte, o FeedOptions) (Progress, error) {
+	workerState, meta, err := decodeSnapshot(state)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -705,7 +815,10 @@ func (s *Session) load(ctx context.Context, state []byte, o FeedOptions) (Progre
 	}
 	s.used = true
 	r := newRunState(s, o)
-	e, err := s.worker.exchange(ctx, request{reqLoad, fieldBytes(1, state)}, o.PrintCallback)
+	r.suspensions = meta.suspensions
+	r.restoring = true
+	s.maxDuration = meta.duration
+	e, err := s.worker.exchange(ctx, request{reqLoad, fieldBytes(1, workerState)}, o.PrintCallback)
 	if err != nil {
 		return nil, err
 	}
@@ -714,9 +827,10 @@ func (s *Session) load(ctx context.Context, state []byte, o FeedOptions) (Progre
 	}
 	s.observeEvent(e)
 	if e.kind == eventOK {
+		r.cancel()
 		return nil, nil
 	}
-	p, err := r.progress(e)
+	p, err := r.progress(ctx, e)
 	if err != nil {
 		return nil, err
 	}

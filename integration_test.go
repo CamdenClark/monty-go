@@ -24,7 +24,7 @@ func integrationPool(t *testing.T, options ...monty.Options) *monty.Monty {
 	}
 	pool, err := monty.New(ctx, options...)
 	if err != nil {
-		if os.Getenv("MONTY_BIN") == "" {
+		if os.Getenv("MONTY_BIN") == "" && os.Getenv("MONTY_REQUIRE_INTEGRATION") != "1" {
 			t.Skipf("Monty integration binary unavailable: %v", err)
 		}
 		t.Fatal(err)
@@ -489,6 +489,9 @@ func TestIntegrationRestoreConcurrentFuturesAcrossPools(t *testing.T) {
 	defer cancel()
 	binary, err := monty.Install(ctx)
 	if err != nil {
+		if os.Getenv("MONTY_REQUIRE_INTEGRATION") == "1" {
+			t.Fatal(err)
+		}
 		t.Skipf("pinned Monty integration binary unavailable: %v", err)
 	}
 
