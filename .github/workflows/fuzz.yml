@@ -34,7 +34,8 @@ jobs:
             FuzzTimeValueRoundTrip \
             FuzzArenaGraph \
             FuzzArenaRoundTrip \
-            FuzzArenaMalformed
+            FuzzArenaMalformed \
+            FuzzComplexValueRoundTrip
           do
             go test -run '^$' -fuzz "^${target}$" -fuzztime="${FUZZ_TIME}" .
           done

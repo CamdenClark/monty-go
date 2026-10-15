@@ -13,6 +13,8 @@ import (
 
 // Value is any value that can cross the Monty boundary. Concrete container
 // types below preserve Python distinctions which a plain Go value cannot.
+// Python complex numbers decode as complex128; both Go complex types encode
+// as Python complex numbers.
 type Value = any
 
 // Ellipsis represents Python's Ellipsis singleton.
@@ -327,6 +329,9 @@ func (e *valueEncoder) encode(v reflect.Value, depth int) ([]byte, error) {
 		return fieldMessage(6, encodeBigInt(z)), nil
 	case reflect.Float32, reflect.Float64:
 		return fieldFixed64(7, math.Float64bits(v.Convert(reflect.TypeFor[float64]()).Float())), nil
+	case reflect.Complex64, reflect.Complex128:
+		z := v.Complex()
+		return fieldMessage(31, append(fieldFixed64(1, math.Float64bits(real(z))), fieldFixed64(2, math.Float64bits(imag(z)))...)), nil
 	case reflect.String:
 		return fieldString(8, v.String()), nil
 	case reflect.Slice:

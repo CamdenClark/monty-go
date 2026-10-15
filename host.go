@@ -384,6 +384,16 @@ func numericTo(value Value, target reflect.Type) (reflect.Value, bool) {
 			return reflect.Value{}, false
 		}
 		z = x
+	case complex128:
+		if target.Kind() != reflect.Complex64 && target.Kind() != reflect.Complex128 {
+			return reflect.Value{}, false
+		}
+		out := reflect.New(target).Elem()
+		if out.OverflowComplex(x) {
+			return reflect.Value{}, false
+		}
+		out.SetComplex(x)
+		return out, true
 	case float64:
 		if target.Kind() != reflect.Float32 && target.Kind() != reflect.Float64 {
 			return reflect.Value{}, false

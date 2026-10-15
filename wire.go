@@ -139,6 +139,28 @@ func readFrame(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
+func decodeComplex(data []byte) (complex128, error) {
+	var parts [2]float64
+	var seen [2]bool
+	if err := parseFields(data, func(f wireField) error {
+		if f.tag != 1 && f.tag != 2 {
+			return nil
+		}
+		if f.type_ != protowire.Fixed64Type {
+			return fmt.Errorf("complex part %d must be fixed64", f.tag)
+		}
+		parts[f.tag-1] = math.Float64frombits(f.fixed64)
+		seen[f.tag-1] = true
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	if !seen[0] || !seen[1] {
+		return 0, fmt.Errorf("complex value requires real and imaginary parts")
+	}
+	return complex(parts[0], parts[1]), nil
+}
+
 func decodeValue(data []byte) (Value, error) {
 	var result Value
 	seen := false
@@ -177,6 +199,12 @@ func decodeValue(data []byte) (Value, error) {
 			result = z
 		case 7:
 			result = math.Float64frombits(f.fixed64)
+		case 31:
+			z, err := decodeComplex(f.bytes)
+			if err != nil {
+				return err
+			}
+			result = z
 		case 8:
 			result = string(f.bytes)
 		case 9:

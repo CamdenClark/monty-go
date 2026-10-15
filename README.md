@@ -2,14 +2,14 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library targets **Monty 1.0.0** (subprocess protocol 5) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+The library targets **Monty 1.1.0** (subprocess protocol 5) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
 
 ## Runtime installation
 
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.6.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.7.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -75,6 +75,8 @@ func main() {
 Input containers are copied into Python; passing the same Go slice or map under multiple names creates independent Python containers. Shared containers returned by Python retain their references in the decoded Go value.
 
 Ordinary Go primitives, slices, maps, exported structs, `time.Time`, `time.Duration`, and `*big.Int` are converted automatically. The named types `Tuple`, `Dict`, `Set`, `FrozenSet`, `Date`, `Time`, `DateTime`, `TimeDelta`, `TimeZone`, `Path`, `FileHandle`, and `NamedTuple` preserve Python distinctions. Sandbox class and dataclass results use `ClassType` and `ClassInstance`, carrying UUID identities and attributes. These class representations are output-only; `Decode` maps instance attributes to Go structs. Expose host operations through explicit functions.
+
+Go `complex64` and `complex128` values map to Python `complex`; Python complex results decode as `complex128`. Typed callbacks and `Decode` also accept `complex64` destinations, rejecting finite components that overflow. Signed zeros, infinities, and NaNs survive the wire format.
 
 Go functions are adapted through reflection. They may accept `context.Context`, typed positional parameters, variadic parameters, and a final `monty.Kwargs`; supported returns are `T`, `error`, or `(T, error)`.
 
@@ -177,7 +179,7 @@ go run ./cmd/monty-install
 MONTY_REQUIRE_INTEGRATION=1 go test -race ./...
 ```
 
-The suite includes unit and integration tests, ten fuzz targets, and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite includes unit and integration tests, eleven fuzz targets, and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.
 
@@ -187,7 +189,7 @@ Run all fuzz targets locally (CI also runs these on pushes, PRs, and weekly):
 for target in FuzzNumericValueConversion FuzzPrimitiveValueConversion \
   FuzzStructuredValueConversion FuzzDecodeNestedResult FuzzDecodeArbitraryResult \
   FuzzMalformedProtocolDecoders FuzzTimeValueRoundTrip \
-  FuzzArenaGraph FuzzArenaRoundTrip FuzzArenaMalformed
+  FuzzArenaGraph FuzzArenaRoundTrip FuzzArenaMalformed FuzzComplexValueRoundTrip
 do
   go test -run '^$' -fuzz "^${target}$" -fuzztime=60s .
 done

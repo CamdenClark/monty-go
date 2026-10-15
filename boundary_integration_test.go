@@ -3,6 +3,7 @@ package monty_test
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 
@@ -87,5 +88,78 @@ func TestArenaMetadata(t *testing.T) {
 	instance, ok := got.(monty.ClassInstance)
 	if !ok || !instance.Type.IsDataclass || !reflect.DeepEqual(instance.Attrs, monty.Dict{{Key: "x", Value: int64(42)}}) {
 		t.Fatalf("dataclass metadata: %#v", got)
+	}
+}
+
+func TestComplexBoundaryValues(t *testing.T) {
+	session := integrationSession(t, integrationPool(t))
+	for _, tc := range []struct {
+		name  string
+		input any
+		want  complex128
+	}{
+		{"complex128", complex128(1.5 - 2.25i), 1.5 - 2.25i},
+		{"complex64", complex64(1.5 - 2.25i), 1.5 - 2.25i},
+		{"zero", complex128(0), 0},
+		{"negative zeros", complex(math.Copysign(0, -1), math.Copysign(0, -1)), complex(math.Copysign(0, -1), math.Copysign(0, -1))},
+		{"infinities", complex(math.Inf(1), math.Inf(-1)), complex(math.Inf(1), math.Inf(-1))},
+		{"nan", complex(math.NaN(), 1), complex(math.NaN(), 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := run(t, session, "value", monty.FeedOptions{Inputs: map[string]any{"value": tc.input}}).(complex128)
+			for i, pair := range [][2]float64{{real(got), real(tc.want)}, {imag(got), imag(tc.want)}} {
+				if math.IsNaN(pair[1]) {
+					if !math.IsNaN(pair[0]) {
+						t.Fatalf("part %d lost NaN: %v", i, got)
+					}
+				} else if math.Float64bits(pair[0]) != math.Float64bits(pair[1]) {
+					t.Fatalf("part %d changed: %v, want %v", i, got, tc.want)
+				}
+			}
+		})
+	}
+	got := run(t, session, "[1+2j, {3-4j: 5+6j}, complex]")
+	want := monty.List{complex128(1 + 2i), monty.Dict{{Key: complex128(3 - 4i), Value: complex128(5 + 6i)}}, monty.Type("complex")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("nested complex values: %#v", got)
+	}
+	got = run(t, session, "transform(1+2j)", monty.FeedOptions{ExternalLookup: monty.ExternalLookup{
+		"transform": func(z complex64) complex64 { return z * (2 - 1i) },
+	}})
+	if got != complex128(4+3i) {
+		t.Fatalf("complex callback: %#v", got)
+	}
+	got = run(t, session, "await transform_async(1+2j)", monty.FeedOptions{ExternalLookup: monty.ExternalLookup{
+		"transform_async": monty.Async(func(z complex128) complex128 { return z * (2 - 1i) }),
+	}})
+	if got != complex128(4+3i) {
+		t.Fatalf("async complex callback: %#v", got)
+	}
+}
+
+func TestComplexSnapshotRestore(t *testing.T) {
+	ctx := context.Background()
+	pool := integrationPool(t)
+	session := integrationSession(t, pool)
+	p, err := session.FeedStart(ctx, "z = 1+2j\nz + host_value()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := p.(*monty.FunctionSnapshot)
+	blob, err := call.Dump(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := integrationSession(t, pool)
+	p, err = restored.LoadSnapshot(ctx, blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = p.(*monty.FunctionSnapshot).Resume(ctx, complex128(3-4i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.(*monty.Complete).Output; got != complex128(4-2i) {
+		t.Fatalf("restored complex result: %#v", got)
 	}
 }

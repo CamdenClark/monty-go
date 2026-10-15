@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.0
+
+This release targets Monty 1.1.0 and subprocess protocol 5.
+
+- Pin and verify the Monty 1.1.0 runtime archives and executables for all five supported platforms.
+- Encode Go `complex64` and `complex128` values as Python complex numbers and decode complex results as `complex128`, preserving signed zeros and non-finite components.
+- Support complex values in typed host callbacks and `Decode`, including overflow checks when narrowing to `complex64`.
+- Test complex inputs, nested results, synchronous and asynchronous callbacks, snapshot restoration, malformed wire values, and arbitrary floating-point bit patterns.
+
+Snapshots from Monty 1.0.0 must still be restored with the earlier runtime and wrapper; this version requires Monty 1.1.0 snapshots.
+
 ## v0.6.0
 
 This release targets Monty 1.0.0 and subprocess protocol 5.
