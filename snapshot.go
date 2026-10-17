@@ -12,8 +12,10 @@ import (
 const snapshotMagic = "monty-go snapshot\x00\x01"
 
 type snapshotMetadata struct {
-	duration    time.Duration
-	suspensions uint64
+	duration      time.Duration
+	suspensions   uint64
+	sleepUsed     time.Duration
+	hasSleepUsage bool
 }
 
 // The worker dump is opaque. Keep host-enforced budgets alongside it so
@@ -22,7 +24,8 @@ func encodeSnapshot(state []byte, meta snapshotMetadata) []byte {
 	b := append([]byte(snapshotMagic), fieldBytes(1, state)...)
 	b = append(b, fieldString(2, RuntimeVersion)...)
 	b = append(b, fieldVarint(3, uint64(meta.duration))...)
-	return append(b, fieldVarint(4, meta.suspensions)...)
+	b = append(b, fieldVarint(4, meta.suspensions)...)
+	return append(b, fieldVarint(5, uint64(meta.sleepUsed))...)
 }
 
 func decodeSnapshot(data []byte) ([]byte, snapshotMetadata, error) {
@@ -34,7 +37,7 @@ func decodeSnapshot(data []byte) ([]byte, snapshotMetadata, error) {
 	var version string
 	seen := map[int]bool{}
 	err := parseFields(data[len(snapshotMagic):], func(f wireField) error {
-		if f.tag < 1 || f.tag > 4 {
+		if f.tag < 1 || f.tag > 5 {
 			return nil
 		}
 		if seen[f.tag] {
@@ -60,6 +63,12 @@ func decodeSnapshot(data []byte) ([]byte, snapshotMetadata, error) {
 			meta.duration = time.Duration(f.varint)
 		case 4:
 			meta.suspensions = f.varint
+		case 5:
+			if f.varint > math.MaxInt64 {
+				return fmt.Errorf("invalid snapshot sleep usage")
+			}
+			meta.sleepUsed = time.Duration(f.varint)
+			meta.hasSleepUsage = true
 		}
 		return nil
 	})

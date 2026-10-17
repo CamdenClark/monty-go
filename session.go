@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"path"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +28,7 @@ func (s PrintStream) String() string {
 	return "stdout"
 }
 
-// PrintCallback receives line-buffered sandbox output.
+// PrintCallback receives sandbox output, line-buffered unless print batching is configured.
 type PrintCallback func(PrintStream, string) error
 
 // FeedOptions configures one snippet.
@@ -35,6 +38,9 @@ type FeedOptions struct {
 	OS             OSHandler
 	PrintCallback  PrintCallback
 	SkipTypeCheck  bool
+	// Cwd switches to an absolute virtual POSIX directory before this feed.
+	// Empty keeps the session's current directory, initially "/".
+	Cwd string
 }
 
 // Session is a persistent Monty REPL checked out from a pool.
@@ -49,6 +55,10 @@ type Session struct {
 	pending          *runState
 	maxDuration      time.Duration
 	maxSuspensions   uint64
+	maxTotalSleep    time.Duration
+	hasSleepLimit    bool
+	sleepUsed        time.Duration
+	systemSleepMax   time.Duration
 	execution        time.Duration
 	durationGrace    time.Duration
 	durationBackstop bool
@@ -80,6 +90,13 @@ func (s *Session) observeEvent(e childEvent) {
 		s.maxSuspensions = *e.maxSuspensions
 	}
 	s.execution = time.Duration(e.totalExecutionMicros) * time.Microsecond
+	if e.maxTotalSleepMicros != nil {
+		limit := time.Duration(min(*e.maxTotalSleepMicros, uint64(math.MaxInt64/time.Microsecond))) * time.Microsecond
+		if !s.hasSleepLimit || limit < s.maxTotalSleep {
+			s.maxTotalSleep = limit
+		}
+		s.hasSleepLimit = true
+	}
 }
 
 // Close resets the worker and returns it to the pool. It is idempotent.
@@ -128,14 +145,15 @@ type Snapshot interface {
 }
 
 type runState struct {
-	session     *Session
-	options     FeedOptions
-	futures     map[uint32]<-chan futureOutcome
-	step        uint64
-	suspensions uint64
-	restoring   bool
-	ctx         context.Context
-	cancel      context.CancelFunc
+	session             *Session
+	options             FeedOptions
+	futures             map[uint32]<-chan futureOutcome
+	step                uint64
+	suspensions         uint64
+	restoring           bool
+	restoreSleepCharged bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
 func newRunState(session *Session, options FeedOptions) *runState {
@@ -174,6 +192,9 @@ type FunctionSnapshot struct {
 	// ObjectID identifies an upstream host-object receiver, when present.
 	ObjectID     *[16]byte
 	IsOSFunction bool
+	// AllowEagerAwait permits ResumeEager/ResumeEagerError for an async result.
+	// Monty sets it when waiting now cannot delay other sandbox work.
+	AllowEagerAwait bool
 }
 
 func (*FunctionSnapshot) isProgress() {}
@@ -217,7 +238,10 @@ func (s *Session) FeedStart(ctx context.Context, code string, options ...FeedOpt
 	if len(options) == 1 {
 		o = options[0]
 	}
-	req, err := feedRequest(code, o.Inputs, o.SkipTypeCheck)
+	if o.Cwd != "" && (!path.IsAbs(o.Cwd) || strings.ContainsRune(o.Cwd, '\x00')) {
+		return nil, fmt.Errorf("Cwd must be an absolute virtual POSIX path without NUL bytes")
+	}
+	req, err := feedRequest(code, o.Inputs, o.SkipTypeCheck, o.Cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +302,7 @@ func (s *Session) FeedRun(ctx context.Context, code string, options ...FeedOptio
 }
 
 func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error) {
+	restoring := r.restoring
 	if e.kind == eventComplete || e.kind >= eventError {
 		r.cancel()
 	}
@@ -314,13 +339,38 @@ func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error)
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
-		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall, ObjectID: c.ObjectID}, nil
+		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, MethodCall: c.MethodCall, ObjectID: c.ObjectID, AllowEagerAwait: c.AllowEagerAwait}, nil
 	case eventOSCall:
 		c, err := decodeOSCall(e.body)
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
-		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, IsOSFunction: true}, nil
+		if c.Name == "system.sleep" || c.Name == "system.async_sleep" {
+			delay := time.Duration(c.Args[0].(float64) * float64(time.Second))
+			if r.session.systemSleepMax != UnlimitedSleep {
+				delay = min(delay, r.session.systemSleepMax)
+			}
+			c.Args[0] = delay.Seconds()
+			s := r.session
+			alreadyCharged := restoring && r.restoreSleepCharged
+			if s.hasSleepLimit && (s.sleepUsed > s.maxTotalSleep || (!alreadyCharged && delay > s.maxTotalSleep-s.sleepUsed)) {
+				exception := RaisedException{Type: "TimeoutError", Message: "Monty maximum total system sleep exceeded"}
+				event, err := s.executionExchange(ctx, request{kind: reqAbortFeed, body: fieldMessage(1, encodeRaised(exception))}, r.options.PrintCallback)
+				if err != nil {
+					r.cancel()
+					return nil, err
+				}
+				return r.progress(ctx, event)
+			}
+			if !alreadyCharged {
+				if delay > time.Duration(math.MaxInt64)-s.sleepUsed {
+					s.sleepUsed = time.Duration(math.MaxInt64)
+				} else {
+					s.sleepUsed += delay
+				}
+			}
+		}
+		return &FunctionSnapshot{state: r, step: r.step, Position: c.Position, FunctionName: c.Name, Args: c.Args, Kwargs: c.Kwargs, CallID: c.CallID, IsOSFunction: true, AllowEagerAwait: c.AllowEagerAwait}, nil
 	case eventNameLookup:
 		snapshot := &NameLookupSnapshot{state: r, step: r.step, Position: decodeSourceRange(decodeBytesField(e.body, 3)), Name: decodeStringField(e.body, 1)}
 		if err := parseFields(e.body, func(f wireField) error {
@@ -459,6 +509,60 @@ func (s *FunctionSnapshot) ResumeFuture(ctx context.Context) (Progress, error) {
 	id := s.CallID
 	return s.resume(ctx, resumeResult{future: &id})
 }
+
+// ResumeEager supplies a settled async result without a future-resolution turn.
+// It is valid only when AllowEagerAwait is true. Synchronous results use Resume.
+func (s *FunctionSnapshot) ResumeEager(ctx context.Context, value Value) (Progress, error) {
+	if !s.AllowEagerAwait {
+		return nil, errors.New("this call does not allow eager await")
+	}
+	if err := s.claim(); err != nil {
+		return nil, err
+	}
+	return s.resumeEager(ctx, value, nil)
+}
+
+// ResumeEagerError supplies an async exception, preserving await-time delivery.
+func (s *FunctionSnapshot) ResumeEagerError(ctx context.Context, err error) (Progress, error) {
+	if !s.AllowEagerAwait {
+		return nil, errors.New("this call does not allow eager await")
+	}
+	if claimErr := s.claim(); claimErr != nil {
+		return nil, claimErr
+	}
+	return s.resumeEager(ctx, nil, err)
+}
+
+func (s *FunctionSnapshot) resumeEager(ctx context.Context, value Value, outcomeErr error) (Progress, error) {
+	result := resumeResult{value: value}
+	if outcomeErr != nil {
+		x := raisedFromError(outcomeErr)
+		result = resumeResult{err: &x}
+	}
+	req, err := resumeFuturesRequest([]futureWireResult{{s.CallID, result}})
+	if err != nil {
+		x := RaisedException{Type: "RuntimeError", Message: err.Error()}
+		req, err = resumeFuturesRequest([]futureWireResult{{s.CallID, resumeResult{err: &x}}})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.state.exchange(ctx, req, s.step)
+}
+
+func (s *FunctionSnapshot) resumeAsync(ctx context.Context, run func() (Value, error), cancel context.CancelFunc) (Progress, error) {
+	if s.AllowEagerAwait {
+		defer cancel()
+		value, err := run()
+		return s.resumeEager(ctx, value, err)
+	}
+	ch := make(chan futureOutcome, 1)
+	go func() { defer cancel(); v, err := run(); ch <- futureOutcome{v, err} }()
+	s.state.futures[s.CallID] = ch
+	id := s.CallID
+	return s.resume(ctx, resumeResult{future: &id})
+}
+
 func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
@@ -477,11 +581,7 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 			}
 		}
 		if s.FunctionName == "system.async_sleep" {
-			ch := make(chan futureOutcome, 1)
-			go func() { defer cancel(); v, err := wait(); ch <- futureOutcome{v, err} }()
-			s.state.futures[s.CallID] = ch
-			id := s.CallID
-			return s.resume(ctx, resumeResult{future: &id})
+			return s.resumeAsync(ctx, wait, cancel)
 		}
 		defer cancel()
 		_, err := wait()
@@ -522,12 +622,8 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		}
 		return s.resume(ctx, resumeResult{value: value})
 	}
-	ch := make(chan futureOutcome, 1)
 	callbackCtx, cancel := s.state.callbackContext(ctx)
-	go func() { defer cancel(); v, e := callHost(callbackCtx, fn, s.Args, s.Kwargs); ch <- futureOutcome{v, e} }()
-	s.state.futures[s.CallID] = ch
-	id := s.CallID
-	return s.resume(ctx, resumeResult{future: &id})
+	return s.resumeAsync(ctx, func() (Value, error) { return callHost(callbackCtx, fn, s.Args, s.Kwargs) }, cancel)
 }
 func mustKwargs(d Dict) Kwargs { k, _ := kwargsMap(d); return k }
 
@@ -558,6 +654,14 @@ func (s *NameLookupSnapshot) ResumeUndefined(ctx context.Context) (Progress, err
 		return nil, err
 	}
 	return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step)
+}
+
+// ResumeError raises an exception at a name lookup instead of resolving it.
+func (s *NameLookupSnapshot) ResumeError(ctx context.Context, err error) (Progress, error) {
+	if claimErr := s.claim(); claimErr != nil {
+		return nil, claimErr
+	}
+	return s.state.exchange(ctx, request{reqResumeName, fieldMessage(4, encodeRaised(raisedFromError(err)))}, s.step)
 }
 func (s *NameLookupSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
@@ -681,7 +785,7 @@ func snapshotDump(ctx context.Context, state *runState, step uint64) ([]byte, er
 	if e.kind != eventDump {
 		return nil, eventErrorValue(e)
 	}
-	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: session.maxDuration, suspensions: state.suspensions}), nil
+	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: session.maxDuration, suspensions: state.suspensions, sleepUsed: session.sleepUsed}), nil
 }
 func (s *FunctionSnapshot) Dump(ctx context.Context) ([]byte, error) {
 	if s.used.Load() {
@@ -722,7 +826,7 @@ func (s *Session) Dump(ctx context.Context) ([]byte, error) {
 	if e.kind != eventDump {
 		return nil, eventErrorValue(e)
 	}
-	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: s.maxDuration}), nil
+	return encodeSnapshot(decodeBytesField(e.body, 1), snapshotMetadata{duration: s.maxDuration, sleepUsed: s.sleepUsed}), nil
 }
 
 // InstallDependencies asks a compatible embedded-CPython worker to install
@@ -817,6 +921,8 @@ func (s *Session) load(ctx context.Context, state []byte, o FeedOptions) (Progre
 	r := newRunState(s, o)
 	r.suspensions = meta.suspensions
 	r.restoring = true
+	r.restoreSleepCharged = meta.hasSleepUsage
+	s.sleepUsed = meta.sleepUsed
 	s.maxDuration = meta.duration
 	e, err := s.worker.exchange(ctx, request{reqLoad, fieldBytes(1, workerState)}, o.PrintCallback)
 	if err != nil {

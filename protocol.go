@@ -5,6 +5,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 type requestKind int
@@ -31,13 +33,15 @@ type request struct {
 func (r request) encode() []byte { return fieldMessage(int(r.kind), r.body) }
 
 type configureWire struct {
-	scriptName        string
-	limits            ResourceLimits
-	typeCheck         bool
-	typeCheckStubs    *string
-	typeCheckFormat   TypeCheckFormat
-	typeCheckColor    bool
-	assertAnnotations *uint32
+	scriptName         string
+	limits             ResourceLimits
+	typeCheck          bool
+	typeCheckStubs     *string
+	typeCheckFormat    TypeCheckFormat
+	typeCheckColor     bool
+	assertAnnotations  *uint32
+	printFlushInterval time.Duration
+	osPolicy           []byte
 }
 
 func configureRequest(x configureWire) request {
@@ -56,8 +60,10 @@ func configureRequest(x configureWire) request {
 	b = append(b, fieldVarint(7, uint64(x.typeCheckFormat.wire()))...)
 	b = append(b, fieldBool(8, x.typeCheckColor)...)
 	b = append(b, fieldVarint(9, protocolVersion)...)
-	// Preserve per-line print callbacks with upstream print debouncing.
-	b = append(b, fieldVarint(10, 0)...)
+	b = append(b, fieldVarint(10, uint64(x.printFlushInterval/time.Millisecond))...)
+	if len(x.osPolicy) > 0 {
+		b = append(b, fieldMessage(11, x.osPolicy)...)
+	}
 	return request{reqConfigure, b}
 }
 
@@ -72,6 +78,9 @@ func encodeLimits(x ResourceLimits) []byte {
 	if x.MaxSuspensions > 0 {
 		b = append(b, fieldVarint(5, x.MaxSuspensions)...)
 	}
+	if x.MaxTotalSleep > 0 {
+		b = append(b, fieldVarint(8, uint64(x.MaxTotalSleep/time.Microsecond))...)
+	}
 	if x.MaxMemory > 0 {
 		b = append(b, fieldVarint(2, x.MaxMemory)...)
 	}
@@ -84,7 +93,7 @@ func encodeLimits(x ResourceLimits) []byte {
 	return b
 }
 
-func feedRequest(code string, inputs map[string]Value, skip bool) (request, error) {
+func feedRequest(code string, inputs map[string]Value, skip bool, cwd string) (request, error) {
 	b := fieldString(1, code)
 	names := make([]string, 0, len(inputs))
 	for k := range inputs {
@@ -102,6 +111,9 @@ func feedRequest(code string, inputs map[string]Value, skip bool) (request, erro
 	}
 	b = append(b, fieldMessage(3, a.encode())...)
 	b = append(b, fieldBool(4, skip)...)
+	if cwd != "" {
+		b = append(b, fieldString(5, cwd)...)
+	}
 	return request{reqFeed, b}, nil
 }
 
@@ -188,6 +200,9 @@ func encodeRaised(x RaisedException) []byte {
 		sf = append(sf, fieldBool(7, f.HideFrameName)...)
 		b = append(b, fieldMessage(3, sf)...)
 	}
+	if data := encodeExceptionData(x.Data); len(data) > 0 {
+		b = append(b, fieldMessage(4, data)...)
+	}
 	return b
 }
 
@@ -213,6 +228,7 @@ type childEvent struct {
 	body                 []byte
 	totalExecutionMicros uint64
 	maxSuspensions       *uint64
+	maxTotalSleepMicros  *uint64
 	restoredScriptName   *string
 }
 
@@ -235,6 +251,12 @@ func decodeEvent(data []byte) (childEvent, error) {
 			case 23:
 				v := string(f.bytes)
 				e.restoredScriptName = &v
+			case 27:
+				if f.type_ != protowire.VarintType {
+					return fmt.Errorf("total sleep limit must be a varint")
+				}
+				v := f.varint
+				e.maxTotalSleepMicros = &v
 			}
 		}
 		return nil
@@ -268,14 +290,15 @@ func decodePrint(data []byte) printEvent {
 }
 
 type callEvent struct {
-	Position   SourceRange
-	Name       string
-	Args       []Value
-	Kwargs     Dict
-	CallID     uint32
-	MethodCall bool
-	ObjectID   *[16]byte
-	OS         bool
+	Position        SourceRange
+	Name            string
+	Args            []Value
+	Kwargs          Dict
+	CallID          uint32
+	MethodCall      bool
+	ObjectID        *[16]byte
+	OS              bool
+	AllowEagerAwait bool
 }
 
 func decodeFunctionCall(data []byte) (callEvent, error) {
@@ -312,6 +335,8 @@ func decodeFunctionCall(data []byte) (callEvent, error) {
 			}
 			x.ObjectID = &id
 			x.MethodCall = true
+		case 6:
+			x.AllowEagerAwait = f.varint != 0
 		}
 		return nil
 	})
@@ -322,6 +347,10 @@ func decodeOSCall(data []byte) (callEvent, error) {
 	x.OS = true
 	x.Position = decodeSourceRange(decodeBytesField(data, 52))
 	err := parseFields(data, func(f wireField) error {
+		if f.tag == 51 {
+			x.AllowEagerAwait = f.varint != 0
+			return nil
+		}
 		if f.tag == 1 {
 			x.CallID = uint32(f.varint)
 			return nil
@@ -535,6 +564,15 @@ func decodeRaised(data []byte) (RaisedException, error) {
 	var x RaisedException
 	err := parseFields(data, func(f wireField) error {
 		switch f.tag {
+		case 4:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("structured exception data must be a message")
+			}
+			d, err := decodeExceptionData(f.bytes)
+			if err != nil {
+				return err
+			}
+			x.Data = d
 		case 1:
 			x.Type = string(f.bytes)
 		case 2:

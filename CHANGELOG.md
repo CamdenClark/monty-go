@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.0
+
+This release expands the Go API while retaining Monty 1.1.0 and subprocess protocol 5.
+
+- Add `CheckoutOptions.OSPolicy` for frozen or delegated clocks, time zones, seeded randomness, sleep policy, and process clocks.
+- Add `ResourceLimits.MaxTotalSleep`, enforced across feeds in Go, with sleep usage preserved in idle and suspended snapshots.
+- Add `FeedOptions.Cwd` and configurable print batching through `CheckoutOptions.PrintFlushInterval`.
+- Preserve structured JSON and Unicode exception data in runtime and host errors.
+- Expose eager-await eligibility and manual eager result/error methods; automatically use the optimization for eligible async callbacks and system sleeps.
+- Add `NameLookupSnapshot.ResumeError`.
+
+Eligible async calls can now complete during `ResumeAuto` without returning a `FutureSnapshot`. Manual drivers can continue to use `ResumeFuture` for explicit future handling. Sleep usage survives snapshot restoration, and a restoring checkout's stricter sleep budget remains a ceiling.
+
 ## v0.7.0
 
 This release targets Monty 1.1.0 and subprocess protocol 5.

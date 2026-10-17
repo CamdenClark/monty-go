@@ -168,15 +168,18 @@ func TestSessionCloseCancelsPendingAsyncCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.(monty.Snapshot).ResumeAuto(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resumed := make(chan error, 1)
+	go func() { _, err := p.(monty.Snapshot).ResumeAuto(ctx); resumed <- err }()
 	awaitSignal(t, started)
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}
 	awaitSignal(t, stopped)
+	select {
+	case <-resumed:
+	case <-time.After(time.Second):
+		t.Fatal("async resume did not stop after closing the session")
+	}
 	if got := run(t, integrationSession(t, pool), "42"); got != int64(42) {
 		t.Fatal(got)
 	}

@@ -184,16 +184,14 @@ func TestIntegrationAsyncExternalFunctionAndSingleUseSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	future, ok := p.(*monty.FutureSnapshot)
-	if !ok {
-		t.Fatalf("got %T", p)
-	}
 	if _, err := call.Resume(context.Background(), int64(0)); err == nil || !strings.Contains(err.Error(), "already been resumed") {
 		t.Fatalf("stale snapshot returned %v", err)
 	}
-	p, err = future.ResumeAuto(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if future, ok := p.(*monty.FutureSnapshot); ok {
+		p, err = future.ResumeAuto(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	done, ok := p.(*monty.Complete)
 	if !ok || done.Output != int64(42) {

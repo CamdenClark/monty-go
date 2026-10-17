@@ -25,6 +25,7 @@ type RaisedException struct {
 	Type    string
 	Message string
 	Frames  []StackFrame
+	Data    ExceptionData
 }
 
 func (e RaisedException) Error() string {
@@ -106,6 +107,7 @@ func (*ProtocolError) MontyError()     {}
 type HostError struct {
 	Type    string
 	Message string
+	Data    ExceptionData
 }
 
 func (e *HostError) Error() string {
@@ -121,7 +123,19 @@ func raisedFromError(err error) RaisedException {
 	}
 	var host *HostError
 	if errors.As(err, &host) {
-		return RaisedException{Type: host.Type, Message: host.Message}
+		return RaisedException{Type: host.Type, Message: host.Message, Data: host.Data}
+	}
+	var runtime *RuntimeError
+	if errors.As(err, &runtime) {
+		return runtime.Exception
+	}
+	var raised RaisedException
+	if errors.As(err, &raised) {
+		return raised
+	}
+	var raisedPtr *RaisedException
+	if errors.As(err, &raisedPtr) && raisedPtr != nil {
+		return *raisedPtr
 	}
 	return RaisedException{Type: "RuntimeError", Message: err.Error()}
 }

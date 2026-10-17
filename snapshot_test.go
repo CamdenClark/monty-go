@@ -9,7 +9,7 @@ import (
 )
 
 func TestSnapshotMetadataRoundTrip(t *testing.T) {
-	want := snapshotMetadata{duration: time.Second, suspensions: 42}
+	want := snapshotMetadata{duration: time.Second, suspensions: 42, sleepUsed: 5 * time.Millisecond, hasSleepUsage: true}
 	state := []byte("opaque worker state")
 	got, meta, err := decodeSnapshot(encodeSnapshot(state, want))
 	if err != nil || meta != want || !bytes.Equal(got, state) {

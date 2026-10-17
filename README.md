@@ -9,7 +9,7 @@ The library targets **Monty 1.1.0** (subprocess protocol 5) and requires Go 1.25
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.7.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.8.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -93,6 +93,8 @@ result, err := session.FeedRun(ctx, `describe(user, excited=True)`, monty.FeedOp
 
 Ordinary functions are synchronous from Python. Mark a callback with `monty.Async(fn)` when Python should `await` it; the Go work then runs through Monty's external-future interface. Return `&monty.HostError{Type: "ValueError", Message: "..."}` to raise a chosen catchable Python exception.
 
+Async callbacks use Monty's eager-await optimization when the worker reports that no other sandbox work can run before the await. `ResumeAuto` then waits for the callback and may return completion directly, without a `FutureSnapshot`. Manual drivers can inspect `FunctionSnapshot.AllowEagerAwait` and answer with `ResumeEager` or `ResumeEagerError`; `ResumeFuture` remains available for explicit future handling.
+
 Callbacks that accept `context.Context` should stop when it is canceled. Pending asynchronous callbacks are canceled when their feed finishes or their session closes. Go callbacks must cooperate with cancellation to stop their work.
 
 Go structs returned by host functions are exposed to Monty as dictionaries. Arbitrary Go host objects and method calls are intentionally not exposed; register explicit host functions for each operation the sandbox may invoke.
@@ -115,6 +117,8 @@ user, err := monty.Decode[User](raw)
 
 `FeedStart` stops at each external call, name lookup, OS call, or unresolved future. Resume manually or call `ResumeAuto` to use `ExternalLookup` and `OS` from the feed options. Snapshots are one-shot and can be serialized before resuming.
 
+`NameLookupSnapshot.ResumeError` raises a chosen exception at a name lookup. `FeedOptions.Cwd` sets an absolute virtual POSIX working directory before a feed; leaving it empty preserves the session's current directory, initially `/`. This directory is retained by snapshots. Filesystem access still requires explicit OS callbacks.
+
 ```go
 p, _ := session.FeedStart(ctx, `greet("Ada") + "!"`)
 call := p.(*monty.FunctionSnapshot)
@@ -131,7 +135,7 @@ Suspension snapshots expose `Position` with the source filename and UTF-8 byte o
 
 Use `Session.Dump` and `LoadSession` between feeds to persist an idle REPL. Dumps are opaque Go wrapper snapshots: restore them through this package with the same Monty runtime version.
 
-Dumps contain Monty's VM state and the Go wrapper's execution budget and suspension count. They do not serialize host-side
+Dumps contain Monty's VM state and the Go wrapper's execution budget, suspension count, and cumulative system-sleep usage. They do not serialize host-side
 `FeedOptions` state such as callback implementations or the Go goroutines and
 channels behind in-flight asynchronous functions.
 Supply fresh `FeedOptions` when loading a suspended snapshot. A restored
@@ -140,9 +144,11 @@ manually with `FutureSnapshot.Resume`.
 
 ## Output, errors, limits, and type checking
 
-`FeedOptions.PrintCallback` receives line-buffered stdout/stderr. `NewCollectString` and `NewCollectStreams` provide capped host collectors.
+`FeedOptions.PrintCallback` receives line-buffered stdout/stderr by default. Set `CheckoutOptions.PrintFlushInterval` to batch output, in whole milliseconds. Output is always flushed before a host call or feed completion. `NewCollectString` and `NewCollectStreams` provide capped host collectors.
 
 Execution failures are typed as `RuntimeError`, `SyntaxError`, `TypingError`, `CrashedError`, or `ProtocolError`. A normal Python error and a typing error leave the session usable. A crash or watchdog timeout loses only that session; the pool replaces its worker.
+
+`RuntimeError.Exception.Data` carries `*JSONErrorData` (message, optional document, character position, line, column) or `*UnicodeErrorData` (encoding, input bytes/string, failing range, reason) when available. Other exceptions have nil data. `HostError.Data` can carry the same payload through a host callback exception.
 
 ```go
 session, _ := pool.Checkout(ctx, monty.CheckoutOptions{
@@ -152,6 +158,7 @@ session, _ := pool.Checkout(ctx, monty.CheckoutOptions{
     Limits: monty.ResourceLimits{
         MaxFeedDuration: 2 * time.Second,
         MaxTurnDuration: time.Second,
+        MaxTotalSleep: 5 * time.Second,
         MaxSuspensions: 1000,
         MaxMemory: 64 << 20,
         MaxRecursionDepth: 100,
@@ -160,6 +167,30 @@ session, _ := pool.Checkout(ctx, monty.CheckoutOptions{
 ```
 
 `Options.RequestTimeout` is the hard per-protocol-turn watchdog. `MaxFeedDuration` resets for each feed, and `MaxTurnDuration` resets for each feed or resume; both exclude host callback waits. `MaxSuspensions` bounds host round trips per feed (default 1000). `MaxDuration` optionally sets a cumulative session budget enforced by the Go host and excludes host callback waits. Dumps preserve this budget and the worker's cumulative execution time. Suspension counts also survive snapshot restoration. Default `time.sleep` and `asyncio.sleep` calls are serviced by the Go host, with each wait capped by the worker at 10 seconds.
+
+`MaxTotalSleep` bounds cumulative system sleep across the session's feeds and snapshot restores. Go charges each capped sleep before waiting, including concurrent async sleeps, and aborts an over-budget feed with an uncatchable `TimeoutError`. The session remains usable. `SleepCallHost` waits are left to the host's own policy and are not charged. Zero leaves this budget unlimited.
+
+## Clocks, time zones, sleeps, and randomness
+
+`CheckoutOptions.OSPolicy` configures deterministic execution and host delegation:
+
+```go
+fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+sleepCap := 100 * time.Millisecond
+session, err := pool.Checkout(ctx, monty.CheckoutOptions{
+    OSPolicy: monty.OSPolicy{
+        FixedDateTime: &fixed,
+        TimeZone: "America/Los_Angeles",
+        Sleep: monty.SleepSystem,
+        SleepSystemMax: &sleepCap,
+        RandomSeed: int64(42),
+    },
+})
+```
+
+The zero policy keeps system time in UTC, OS entropy, system sleeps capped at ten seconds, and a zero process clock. `DateTimeCallHost`, `RandomCallHost`, and `SleepCallHost` delegate their operations to `FeedOptions.OS`. `FixedDateTime` freezes the clock; use `TimeZone` for an IANA name or `FixedTimeZone` for a fixed offset. `SleepZero` skips waits. `SleepSystemMax` accepts an explicit zero or `monty.UnlimitedSleep`, and only applies to system sleeps. `RandomSeed` accepts Go integers, `*big.Int`, finite floats, strings, and byte slices. `ProcessTimeElapsed` exposes the session's accumulated sandbox execution time.
+
+`FixedDateTime` and `DateTime`, `FixedTimeZone` and `TimeZone`, and `RandomSeed` and `Random` are alternative settings and cannot be combined. Duration caps are truncated to the worker's microsecond resolution. The Go host also applies its configured per-sleep cap when restoring a snapshot.
 
 ## Host OS callbacks
 

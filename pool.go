@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the version of this Go wrapper.
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 // Options configures a Monty worker pool.
 type Options struct {
@@ -41,9 +41,12 @@ type Options struct {
 // Zero leaves the worker default in place; durations default to unlimited.
 type ResourceLimits struct {
 	// MaxDuration is a cumulative host-enforced session budget.
-	MaxDuration       time.Duration
-	MaxFeedDuration   time.Duration
-	MaxTurnDuration   time.Duration
+	MaxDuration     time.Duration
+	MaxFeedDuration time.Duration
+	MaxTurnDuration time.Duration
+	// MaxTotalSleep bounds cumulative system sleep across the session, including
+	// asynchronous sleeps. SleepCallHost waits are not charged to this budget.
+	MaxTotalSleep     time.Duration
 	MaxMemory         uint64
 	GCInterval        uint64
 	MaxRecursionDepth uint64
@@ -100,6 +103,10 @@ type CheckoutOptions struct {
 	TypeCheckFormat          TypeCheckFormat
 	TypeCheckColor           bool
 	AssertMessageAnnotations any // nil/true = default, false = disabled, positive uint32 = truncation bytes
+	// PrintFlushInterval batches output for this long, in whole milliseconds.
+	// Zero preserves line buffering. Output is flushed before suspensions/end.
+	PrintFlushInterval time.Duration
+	OSPolicy           OSPolicy
 }
 
 // Monty owns a pool of crash-isolated subprocess workers.
@@ -295,6 +302,16 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if o.TypeCheckFormat.wire() == 0 {
 		return nil, fmt.Errorf("unknown TypeCheckFormat %q", o.TypeCheckFormat)
 	}
+	if o.PrintFlushInterval < 0 || o.PrintFlushInterval/time.Millisecond > math.MaxUint32 {
+		return nil, fmt.Errorf("PrintFlushInterval must be between zero and 2^32-1 milliseconds")
+	}
+	if o.Limits.MaxTotalSleep < 0 {
+		return nil, fmt.Errorf("MaxTotalSleep cannot be negative")
+	}
+	osPolicy, sleepCap, err := encodeOSPolicy(o.OSPolicy)
+	if err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	closed := p.closed
 	p.mu.Unlock()
@@ -343,7 +360,11 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if o.TypeCheckStubs != "" {
 		stubs = &o.TypeCheckStubs
 	}
-	e, err := w.exchange(ctx, configureRequest(configureWire{o.ScriptName, o.Limits, o.TypeCheck, stubs, o.TypeCheckFormat, o.TypeCheckColor, annotations}), nil)
+	e, err := w.exchange(ctx, configureRequest(configureWire{
+		scriptName: o.ScriptName, limits: o.Limits, typeCheck: o.TypeCheck,
+		typeCheckStubs: stubs, typeCheckFormat: o.TypeCheckFormat, typeCheckColor: o.TypeCheckColor,
+		assertAnnotations: annotations, printFlushInterval: o.PrintFlushInterval, osPolicy: osPolicy,
+	}), nil)
 	if err != nil {
 		p.release(w, false)
 		return nil, err
@@ -357,7 +378,13 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if grace == 0 {
 		grace = time.Second
 	}
-	return &Session{pool: p, worker: w, scriptName: o.ScriptName, maxDuration: o.Limits.MaxDuration, maxSuspensions: o.Limits.MaxSuspensions, durationGrace: grace, durationBackstop: !p.options.DisableDurationLimitBackstop}, nil
+	return &Session{
+		pool: p, worker: w, scriptName: o.ScriptName,
+		maxDuration: o.Limits.MaxDuration, maxSuspensions: o.Limits.MaxSuspensions,
+		maxTotalSleep: o.Limits.MaxTotalSleep, hasSleepLimit: o.Limits.MaxTotalSleep > 0,
+		systemSleepMax: sleepCap, durationGrace: grace,
+		durationBackstop: !p.options.DisableDurationLimitBackstop,
+	}, nil
 }
 func normalizeAnnotations(x any) (*uint32, error) {
 	if x == nil {

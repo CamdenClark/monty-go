@@ -195,6 +195,8 @@ func fuzzBoundaryValue(data []byte, depth int) Value {
 // and event decoders. Generated-value fuzzers do not cover malformed protobuf
 // tags, lengths, or truncated frames.
 func FuzzMalformedProtocolDecoders(f *testing.F) {
+	f.Add(encodeExceptionData(&JSONErrorData{Message: "bad JSON", Position: 2, Line: 1, Column: 3}))
+	f.Add(encodeExceptionData(&UnicodeErrorData{Encoding: "utf-8", ObjectBytes: []byte{255}, End: 1, Reason: "invalid start byte"}))
 	f.Add([]byte{})
 	f.Add(encodeSnapshot([]byte("opaque"), snapshotMetadata{duration: time.Second, suspensions: 42}))
 	f.Add([]byte{0})
@@ -301,6 +303,7 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 		_, _ = decodeOSCall(data)
 		_, _ = decodeComplete(data)
 		_, _ = decodeRaised(data)
+		_, _ = decodeExceptionData(data)
 		_, _ = decodeErrorEvent(data)
 		_ = decodeStringField(data, 1)
 		_ = decodeUint32List(data, 1)
