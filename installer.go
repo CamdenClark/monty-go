@@ -242,9 +242,13 @@ func installRuntime(ctx context.Context, option InstallOptions, artifact runtime
 }
 
 func acquireInstallLock(ctx context.Context, path string) (func(), error) {
+	return acquireInstallLockWithOpen(ctx, path, runtime.GOOS == "windows", os.OpenFile)
+}
+
+func acquireInstallLockWithOpen(ctx context.Context, path string, retryPermission bool, openFile func(string, int, os.FileMode) (*os.File, error)) (func(), error) {
 	var permissionRetryUntil time.Time
 	for {
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		file, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err == nil {
 			_, _ = fmt.Fprintf(file, "pid=%d time=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
 			return func() {
@@ -252,7 +256,7 @@ func acquireInstallLock(ctx context.Context, path string) (func(), error) {
 				_ = os.Remove(path)
 			}, nil
 		}
-		if runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission) {
+		if retryPermission && errors.Is(err, os.ErrPermission) {
 			// Windows reports ERROR_ACCESS_DENIED for a file pending deletion.
 			// A contender can observe this just as another installer releases
 			// its lock. Bound retries so real permission errors still fail.

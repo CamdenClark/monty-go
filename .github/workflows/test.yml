@@ -35,4 +35,4 @@ jobs:
         run: go vet ./...
       - name: Stress Windows installer locking
         if: runner.os == 'Windows'
-        run: go test -race -run '^(TestInstallRuntimeConcurrentCallersDownloadOnce|TestAcquireInstallLockPendingWindowsDeletion)$' -count=10 .
+        run: go test -race -run '^(TestInstallRuntimeConcurrentCallersDownloadOnce|TestAcquireInstallLockRetriesTransientPermissionErrors)$' -count=10 .

@@ -360,6 +360,48 @@ func TestAcquireInstallLockReclaimsStaleLock(t *testing.T) {
 	}
 }
 
+func TestAcquireInstallLockRetriesTransientPermissionErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.lock")
+	attempts := 0
+	openFile := func(name string, flag int, mode os.FileMode) (*os.File, error) {
+		attempts++
+		if attempts <= 3 {
+			return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrPermission}
+		}
+		return os.OpenFile(name, flag, mode)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	release, err := acquireInstallLockWithOpen(ctx, path, true, openFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if attempts != 4 {
+		t.Fatalf("attempts = %d, want 4", attempts)
+	}
+}
+
+func TestAcquireInstallLockPersistentPermissionErrors(t *testing.T) {
+	openFile := func(name string, _ int, _ os.FileMode) (*os.File, error) {
+		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrPermission}
+	}
+	for _, windows := range []bool{false, true} {
+		t.Run(fmt.Sprint(windows), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if _, err := acquireInstallLockWithOpen(ctx, filepath.Join(t.TempDir(), "runtime.lock"), windows, openFile); !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("permission error was hidden: %v", err)
+			}
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := acquireInstallLockWithOpen(ctx, filepath.Join(t.TempDir(), "runtime.lock"), true, openFile); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("permission retry ignored cancellation: %v", err)
+	}
+}
+
 func TestRuntimeCacheDirectoryPrecedence(t *testing.T) {
 	environmentDir := filepath.Join(t.TempDir(), "environment")
 	explicitDir := filepath.Join(t.TempDir(), "explicit")
