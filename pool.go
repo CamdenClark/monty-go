@@ -96,6 +96,8 @@ func (f TypeCheckFormat) wire() uint64 {
 
 // CheckoutOptions configures one persistent REPL session.
 type CheckoutOptions struct {
+	// ExternalModules supplies importable Go modules for every feed and restore.
+	ExternalModules          ExternalModules
 	ScriptName               string
 	Limits                   ResourceLimits
 	TypeCheck                bool
@@ -308,6 +310,11 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	if o.Limits.MaxTotalSleep < 0 {
 		return nil, fmt.Errorf("MaxTotalSleep cannot be negative")
 	}
+	for name, module := range o.ExternalModules {
+		if !pythonIdentifier(name) || module == nil {
+			return nil, fmt.Errorf("invalid external module %q", name)
+		}
+	}
 	osPolicy, sleepCap, err := encodeOSPolicy(o.OSPolicy)
 	if err != nil {
 		return nil, err
@@ -380,7 +387,8 @@ func (p *Monty) Checkout(ctx context.Context, options ...CheckoutOptions) (*Sess
 	}
 	return &Session{
 		pool: p, worker: w, scriptName: o.ScriptName,
-		maxDuration: o.Limits.MaxDuration, maxSuspensions: o.Limits.MaxSuspensions,
+		externalModules: o.ExternalModules,
+		maxDuration:     o.Limits.MaxDuration, maxSuspensions: o.Limits.MaxSuspensions,
 		maxTotalSleep: o.Limits.MaxTotalSleep, hasSleepLimit: o.Limits.MaxTotalSleep > 0,
 		systemSleepMax: sleepCap, durationGrace: grace,
 		durationBackstop: !p.options.DisableDurationLimitBackstop,

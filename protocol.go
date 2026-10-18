@@ -537,6 +537,91 @@ func decodeOSCall(data []byte) (callEvent, error) {
 			})
 			x.Name = "datetime.now"
 			x.Args = []Value{tz}
+		case 31:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("import call must be a message")
+			}
+			x.Name = "import"
+			var name string
+			if err := parseFields(f.bytes, func(v wireField) error {
+				if v.tag == 1 {
+					if v.type_ != protowire.BytesType {
+						return fmt.Errorf("import module name must be a string")
+					}
+					name = string(v.bytes)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			x.Args = []Value{name}
+		case 32:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("import stubs call must be a message")
+			}
+			x.Name = "import_stubs"
+			names := List{}
+			seen := map[string]bool{}
+			if err := parseFields(f.bytes, func(v wireField) error {
+				if v.tag == 1 {
+					if v.type_ != protowire.BytesType {
+						return fmt.Errorf("import module name must be a string")
+					}
+					name := string(v.bytes)
+					if seen[name] {
+						return fmt.Errorf("duplicate import stub module %q", name)
+					}
+					seen[name] = true
+					names = append(names, name)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			x.Args = []Value{names}
+		case 33:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("scan call must be a message")
+			}
+			x.Name = "Path.scan"
+			var path string
+			var depth, caseSensitive Value
+			var follow, recurse bool
+			pattern := List{}
+			if err := parseFields(f.bytes, func(v wireField) error {
+				switch v.tag {
+				case 1, 4:
+					if v.type_ != protowire.BytesType {
+						return fmt.Errorf("scan path/pattern must be a string")
+					}
+					if v.tag == 1 {
+						path = string(v.bytes)
+					} else {
+						pattern = append(pattern, string(v.bytes))
+					}
+				case 2, 3, 5, 6:
+					if v.type_ != protowire.VarintType {
+						return fmt.Errorf("scan option must be a varint")
+					}
+					switch v.tag {
+					case 2:
+						if v.varint > math.MaxUint32 {
+							return fmt.Errorf("scan depth exceeds uint32")
+						}
+						depth = uint32(v.varint)
+					case 3:
+						follow = v.varint != 0
+					case 5:
+						caseSensitive = v.varint != 0
+					case 6:
+						recurse = v.varint != 0
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			x.Args = []Value{path, depth, follow, pattern, caseSensitive, recurse}
 		}
 		return nil
 	})
@@ -562,17 +647,14 @@ func decodeComplete(data []byte) (Value, error) {
 }
 func decodeRaised(data []byte) (RaisedException, error) {
 	var x RaisedException
+	var structuredData []byte
 	err := parseFields(data, func(f wireField) error {
 		switch f.tag {
 		case 4:
 			if f.type_ != protowire.BytesType {
 				return fmt.Errorf("structured exception data must be a message")
 			}
-			d, err := decodeExceptionData(f.bytes)
-			if err != nil {
-				return err
-			}
-			x.Data = d
+			structuredData = f.bytes
 		case 1:
 			x.Type = string(f.bytes)
 		case 2:
@@ -620,6 +702,11 @@ func decodeRaised(data []byte) (RaisedException, error) {
 		}
 		return nil
 	})
+	if err == nil && structuredData != nil {
+		// TOML errors can quote keys longer than the document cap. The
+		// payload message is bounded by the enclosing exception message.
+		x.Data, err = decodeExceptionDataWithLimit(structuredData, max(maxExceptionDataFieldSize, len(x.Message)))
+	}
 	return x, err
 }
 func decodeErrorEvent(data []byte) (RaisedException, error) {

@@ -48,6 +48,7 @@ type Session struct {
 	pool             *Monty
 	worker           *worker
 	scriptName       string
+	externalModules  ExternalModules
 	mu               sync.Mutex
 	closed           bool
 	used             bool
@@ -591,6 +592,25 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		return s.resume(ctx, resumeResult{})
 	}
 	if s.IsOSFunction {
+		if s.FunctionName == "import" {
+			name := s.Args[0].(string)
+			if module := s.state.session.externalModules[name]; module != nil {
+				value, err := module.value(name, 0)
+				if err != nil {
+					return s.resumeError(ctx, err)
+				}
+				return s.resume(ctx, resumeResult{value: value})
+			}
+		}
+		if s.FunctionName == "import_stubs" && s.state.session.externalModules != nil {
+			stubs := map[string]Value{}
+			for _, name := range s.Args[0].(List) {
+				if module := s.state.session.externalModules[name.(string)]; module != nil {
+					module.collectStubs(name.(string), stubs)
+				}
+			}
+			return s.resume(ctx, resumeResult{value: stubs})
+		}
 		handler := s.state.options.OS
 		if handler == nil {
 			return s.resume(ctx, resumeResult{notHandled: true})
@@ -610,6 +630,9 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		return s.resumeError(ctx, &HostError{Type: "RuntimeError", Message: "method calls on host objects are not supported: " + s.FunctionName})
 	}
 	fn, ok := s.state.options.ExternalLookup[s.FunctionName]
+	if !ok {
+		fn, ok = s.state.session.externalModules.function(s.FunctionName)
+	}
 	if !ok || !isHostFunction(fn) {
 		return s.resumeError(ctx, &HostError{Type: "NameError", Message: "external function not found: " + s.FunctionName})
 	}
@@ -923,7 +946,9 @@ func (s *Session) load(ctx context.Context, state []byte, o FeedOptions) (Progre
 	r.restoring = true
 	r.restoreSleepCharged = meta.hasSleepUsage
 	s.sleepUsed = meta.sleepUsed
-	s.maxDuration = meta.duration
+	if s.maxDuration == 0 || (meta.duration > 0 && meta.duration < s.maxDuration) {
+		s.maxDuration = meta.duration
+	}
 	e, err := s.worker.exchange(ctx, request{reqLoad, fieldBytes(1, workerState)}, o.PrintCallback)
 	if err != nil {
 		return nil, err

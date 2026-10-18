@@ -2,14 +2,16 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library targets **Monty 1.1.0** (subprocess protocol 5) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+The library targets **Monty 1.2.0** (subprocess protocol 5) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+
+Monty 1.2.0 adds `match`/`case` structural patterns, list slice assignment, set ordering, more user-defined arithmetic and subscript methods, dataclass `field(default=...)`, `default_factory` and `__post_init__`, and the `hashlib`, `os.path`, `bisect`, `csv` and `tomllib` modules. File iteration, newline handling, `json.load`/`json.dump`, and captured groups in `re.split` are also available. See the [upstream Python subset](https://github.com/pydantic/monty/tree/v1.2.0/docs/limitations) for each feature's supported surface.
 
 ## Runtime installation
 
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.8.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.9.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -113,6 +115,30 @@ raw, _ := session.FeedRun(ctx, `{"name": "Ada", "tags": ["go"]}`)
 user, err := monty.Decode[User](raw)
 ```
 
+## Importable host modules
+
+Expose Go functions and constants through Python imports with `CheckoutOptions.ExternalModules`:
+
+```go
+tools, err := monty.NewExternalModule(map[string]any{
+    "add": func(a, b int) int { return a + b },
+    "VERSION": "1.0",
+}, monty.ExternalModuleOptions{
+    Stubs: "def add(a: int, b: int) -> int: ...\nVERSION: str",
+})
+if err != nil { log.Fatal(err) }
+session, err := pool.Checkout(ctx, monty.CheckoutOptions{
+    ExternalModules: monty.ExternalModules{"tools": tools},
+})
+if err != nil { log.Fatal(err) }
+defer session.Close()
+result, err := session.FeedRun(ctx, "from tools import add\nadd(20, 22)")
+```
+
+Attributes are copied at construction; names beginning with `_` are excluded. A nested `*ExternalModule` attribute supplies a submodule such as `tools.sub`. Functions accept the same typed parameters, kwargs and `Async` wrappers as `ExternalLookup`. Optional `.pyi` stubs are supplied before type checking. The sandbox's builtin modules take precedence over host modules.
+
+Module results decode as `Module{Name, ID, Attrs}` and retain their UUID identity. Supply the modules again at checkout when restoring a session or snapshot; callbacks and stubs are host state. `ExternalModuleOptions.ID` can preserve a module's identity across Go processes. For manual drivers, imports and stub requests appear as OS `FunctionSnapshot`s named `import` and `import_stubs`. An `OSHandler` can return a `Module` with explicit `Function` attributes, whose callbacks resolve through `ExternalLookup`, or return a dictionary of module paths to `.pyi` strings for stubs. Missing imports raise `ModuleNotFoundError`.
+
 ## Snapshots
 
 `FeedStart` stops at each external call, name lookup, OS call, or unresolved future. Resume manually or call `ResumeAuto` to use `ExternalLookup` and `OS` from the feed options. Snapshots are one-shot and can be serialized before resuming.
@@ -148,7 +174,7 @@ manually with `FutureSnapshot.Resume`.
 
 Execution failures are typed as `RuntimeError`, `SyntaxError`, `TypingError`, `CrashedError`, or `ProtocolError`. A normal Python error and a typing error leave the session usable. A crash or watchdog timeout loses only that session; the pool replaces its worker.
 
-`RuntimeError.Exception.Data` carries `*JSONErrorData` (message, optional document, character position, line, column) or `*UnicodeErrorData` (encoding, input bytes/string, failing range, reason) when available. Other exceptions have nil data. `HostError.Data` can carry the same payload through a host callback exception.
+`RuntimeError.Exception.Data` carries `*JSONErrorData` for JSON and TOML decode errors (message, optional document, character position, line, column) or `*UnicodeErrorData` (encoding, input bytes/string, failing range, reason) when available. Other exceptions have nil data. `HostError.Data` can carry the same payload through a host callback exception.
 
 ```go
 session, _ := pool.Checkout(ctx, monty.CheckoutOptions{
@@ -166,7 +192,7 @@ session, _ := pool.Checkout(ctx, monty.CheckoutOptions{
 })
 ```
 
-`Options.RequestTimeout` is the hard per-protocol-turn watchdog. `MaxFeedDuration` resets for each feed, and `MaxTurnDuration` resets for each feed or resume; both exclude host callback waits. `MaxSuspensions` bounds host round trips per feed (default 1000). `MaxDuration` optionally sets a cumulative session budget enforced by the Go host and excludes host callback waits. Dumps preserve this budget and the worker's cumulative execution time. Suspension counts also survive snapshot restoration. Default `time.sleep` and `asyncio.sleep` calls are serviced by the Go host, with each wait capped by the worker at 10 seconds.
+`Options.RequestTimeout` is the hard per-protocol-turn watchdog. `MaxFeedDuration` resets for each feed, and `MaxTurnDuration` resets for each feed or resume; both exclude host callback waits. `MaxSuspensions` bounds host round trips per feed (default 1000). `MaxDuration` optionally sets a cumulative session budget enforced by the Go host and excludes host callback waits. Dumps preserve this budget and the worker's cumulative execution time. Restoration retains the stricter snapshot or destination limits, including the Go host's duration budget. Suspension counts also survive snapshot restoration. Default `time.sleep` and `asyncio.sleep` calls are serviced by the Go host, with each wait capped by the worker at 10 seconds.
 
 `MaxTotalSleep` bounds cumulative system sleep across the session's feeds and snapshot restores. Go charges each capped sleep before waiting, including concurrent async sleeps, and aborts an over-budget feed with an uncatchable `TimeoutError`. The session remains usable. `SleepCallHost` waits are left to the host's own policy and are not charged. Zero leaves this budget unlimited.
 
@@ -201,6 +227,8 @@ apply Monty's default denial. Treat any handler that accesses host paths as a
 security boundary and validate it independently. Audited mount support is
 tracked separately in [issue #1](https://github.com/CamdenClark/monty-go/issues/1).
 
+`os.scandir`, `os.walk`, `Path.walk`, `Path.glob` and `Path.rglob` use the `Path.scan` OS call. Its arguments are `[path, maxDepth, followSymlinks, pattern, caseSensitive, recurseSymlinks]`: `maxDepth` is `nil` or `uint32`, `pattern` is a `List` of glob parts, and `caseSensitive` is `nil` or `bool`. Preserve the difference between absent options and explicit zero/false. Return a `List` of `Tuple{relativePath, isDir, isFile, isSymlink}` entries, including the root as `""`. Globs also accept `Dict{{Key: "matches", Value: List{...}}}` with preselected relative paths. All paths are virtual POSIX paths.
+
 ## Testing
 
 Unit tests always run. Integration tests run real Monty programs when a binary resolves, and otherwise skip during local development. Set `MONTY_REQUIRE_INTEGRATION=1` to fail if a worker cannot be started. CI requires integration tests on Linux, macOS, and Windows. To provision the pinned runtime and run everything:
@@ -210,7 +238,7 @@ go run ./cmd/monty-install
 MONTY_REQUIRE_INTEGRATION=1 go test -race ./...
 ```
 
-The suite includes unit and integration tests, eleven fuzz targets, and table-driven subtests. Twelve tests focus specifically on REPL semantics: assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors.
+The suite includes unit and integration tests, fourteen fuzz targets, and table-driven subtests. REPL tests cover assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors. Monty 1.2 coverage exercises patterns and guards, slice assignment, new standard-library features, importable host modules, file iteration and scanning, and restoration under stricter destination limits. Statement fuzzing runs real Monty programs against an independent Go oracle.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.
 
@@ -220,7 +248,8 @@ Run all fuzz targets locally (CI also runs these on pushes, PRs, and weekly):
 for target in FuzzNumericValueConversion FuzzPrimitiveValueConversion \
   FuzzStructuredValueConversion FuzzDecodeNestedResult FuzzDecodeArbitraryResult \
   FuzzMalformedProtocolDecoders FuzzTimeValueRoundTrip \
-  FuzzArenaGraph FuzzArenaRoundTrip FuzzArenaMalformed FuzzComplexValueRoundTrip
+  FuzzArenaGraph FuzzArenaRoundTrip FuzzArenaMalformed FuzzComplexValueRoundTrip \
+  FuzzModuleValueRoundTrip FuzzMonty12OSCalls FuzzMonty12Statements
 do
   go test -run '^$' -fuzz "^${target}$" -fuzztime=60s .
 done

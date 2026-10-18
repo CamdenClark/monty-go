@@ -46,3 +46,19 @@ func TestExceptionDataMalformed(t *testing.T) {
 		})
 	}
 }
+
+func TestLongTOMLExceptionMessage(t *testing.T) {
+	message := strings.Repeat("x", maxExceptionDataFieldSize+1)
+	want := RaisedException{Type: "tomllib.TOMLDecodeError", Message: message, Data: &JSONErrorData{Message: message, Position: 1, Line: 1, Column: 2}}
+	// Protobuf field ordering must not affect the message-dependent limit.
+	wire := append(fieldMessage(4, encodeExceptionData(want.Data)), fieldString(1, want.Type)...)
+	wire = append(wire, fieldString(2, message)...)
+	got, err := decodeRaised(wire)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("long TOML error: %v", err)
+	}
+	want.Message = "short"
+	if _, err := decodeRaised(encodeRaised(want)); err == nil {
+		t.Fatal("unbounded structured message accepted")
+	}
+}

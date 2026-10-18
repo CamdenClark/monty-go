@@ -208,6 +208,7 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 		f.Add(seed)
 	}
 	boundaryValues := []Value{
+		Module{Name: "tools", ID: [16]byte{1}, Attrs: Dict{{"answer", int64(42)}}},
 		Time{Hour: 23, Microsecond: 999999, OffsetSeconds: &offset, TimezoneName: &zoneName, Fold: 1},
 		Ellipsis{}, nil, true, int64(-42), big.NewInt(1 << 62), 3.5,
 		"text", []byte{0, 1, 255}, List{"item"}, Tuple{int64(1)},
@@ -246,6 +247,11 @@ func FuzzMalformedProtocolDecoders(f *testing.F) {
 	raisedBody := encodeRaised(RaisedException{Type: "ValueError", Message: "bad value"})
 	errorBody := fieldMessage(1, raisedBody)
 	protocolBodies := [][]byte{printBody, callBody, osBody, completeBody, raisedBody, errorBody}
+	protocolBodies = append(protocolBodies,
+		fieldMessage(31, fieldString(1, "tools")),
+		fieldMessage(32, fieldString(1, "tools")),
+		fieldMessage(33, append(fieldString(1, "/data"), fieldVarint(2, 0)...)),
+	)
 	for _, body := range protocolBodies {
 		f.Add(body)
 	}

@@ -27,8 +27,9 @@ type UnicodeErrorData struct {
 
 func (*UnicodeErrorData) isExceptionData() {}
 
-// JSONErrorData preserves json.JSONDecodeError attributes. Document is absent
-// if the worker omitted it because of its size or invalid UTF-8 in byte input.
+// JSONErrorData preserves json.JSONDecodeError and tomllib.TOMLDecodeError
+// attributes. Document is absent if the worker omitted it because of its size
+// or invalid UTF-8 in byte input.
 // Position is a character index; Line and Column are one-based.
 type JSONErrorData struct {
 	Message      string
@@ -73,6 +74,10 @@ func encodeExceptionData(data ExceptionData) []byte {
 }
 
 func decodeExceptionData(data []byte) (ExceptionData, error) {
+	return decodeExceptionDataWithLimit(data, maxExceptionDataFieldSize)
+}
+
+func decodeExceptionDataWithLimit(data []byte, messageLimit int) (ExceptionData, error) {
 	var result ExceptionData
 	err := parseFields(data, func(f wireField) error {
 		if f.tag != 1 && f.tag != 2 {
@@ -134,8 +139,8 @@ func decodeExceptionData(data []byte) (ExceptionData, error) {
 				if (p.tag == 1 || p.tag == 2) && p.type_ != protowire.BytesType || (p.tag >= 3 && p.tag <= 5) && p.type_ != protowire.VarintType {
 					return fmt.Errorf("invalid JSONErrorData field %d", p.tag)
 				}
-				if (p.tag == 1 || p.tag == 2) && len(p.bytes) > maxExceptionDataFieldSize {
-					return fmt.Errorf("JSONErrorData field %d exceeds 64 KiB", p.tag)
+				if p.tag == 2 && len(p.bytes) > maxExceptionDataFieldSize || p.tag == 1 && len(p.bytes) > messageLimit {
+					return fmt.Errorf("JSONErrorData field %d exceeds its size limit", p.tag)
 				}
 				switch p.tag {
 				case 1:

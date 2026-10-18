@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.0
+
+This release targets [Monty 1.2.0](https://github.com/pydantic/monty/releases/tag/v1.2.0) and subprocess protocol 5.
+
+- Pin and verify the Monty 1.2.0 runtime archives and executables for all five supported platforms.
+- Support upstream `match`/`case` patterns, list slice assignment, set ordering, expanded user-defined arithmetic and subscript methods, and dataclass defaults, factories and `__post_init__`.
+- Make the new `hashlib`, `os.path`, `bisect`, `csv` and `tomllib` modules available, alongside file iteration/newline handling, `json.load`/`json.dump` and `re.split` capture groups, within upstream's supported Python subset.
+- Add `NewExternalModule`, `ExternalModules` and `CheckoutOptions.ExternalModules` for importable Go functions, constants and nested modules, with optional type-checking stubs and stable identities. Encode and decode `Module` values and expose manual `import`/`import_stubs` OS suspensions.
+- Decode `Path.scan` with all optional arguments for directory scans, walks and globs through `FeedOptions.OS`.
+- Preserve structured TOML decode errors as `JSONErrorData`, including messages longer than the document size cap.
+- Retain the stricter destination or snapshot cumulative Go duration budget when restoring state, alongside upstream's restored resource-limit caps.
+- Add real-worker language, library, import, filesystem and snapshot regression tests. Expand malformed-protocol seeds and add module round-trip, OS-call and real-worker statement fuzzing; CI now provisions the pinned worker for all fourteen fuzz targets.
+
+Monty 1.1.0 snapshots must be restored with the earlier runtime and wrapper; this version requires Monty 1.2.0 snapshots. Host module callbacks and stubs must be supplied again when restoring.
+
 ## v0.8.0
 
 This release expands the Go API while retaining Monty 1.1.0 and subprocess protocol 5.

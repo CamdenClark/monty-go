@@ -185,6 +185,10 @@ func FuzzArenaRoundTrip(f *testing.F) {
 }
 
 func FuzzArenaMalformed(f *testing.F) {
+	id := fieldMessage(2, fieldBytes(1, make([]byte, 16)))
+	f.Add(fieldMessage(2, fieldMessage(32, append(id, fieldMessage(3, nil)...))))
+	f.Add(fieldMessage(2, fieldMessage(32, id)))
+	f.Add(fieldMessage(2, fieldMessage(32, append(id, fieldMessage(3, fieldMessage(1, fieldVarint(1, 0)))...))))
 	valid, _ := arenaGraph([]byte{3, 6, 4, 5})
 	for _, data := range [][]byte{nil, valid, fieldMessage(2, nil), fieldMessage(2, fieldMessage(11, fieldVarint(1, 100))), fieldMessage(2, append(fieldString(8, "a"), fieldString(8, "b")...)), fieldMessage(2, fieldMessage(11, fieldBytes(1, []byte{128})))} {
 		f.Add(data)

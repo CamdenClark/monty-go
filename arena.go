@@ -17,7 +17,7 @@ func (a *arenaEncoder) add(value Value) (uint32, error) {
 	return a.addLegacy(b)
 }
 
-var legacyNodeTags = map[int]int{1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 11: 11, 12: 12, 13: 13, 14: 14, 15: 15, 16: 16, 17: 17, 18: 18, 19: 19, 20: 20, 21: 21, 22: 22, 23: 23, 25: 25, 26: 26, 27: 27, 28: 28, 29: 29, 30: 30, 31: 31}
+var legacyNodeTags = map[int]int{1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 11: 11, 12: 12, 13: 13, 14: 14, 15: 15, 16: 16, 17: 17, 18: 18, 19: 19, 20: 20, 21: 21, 22: 22, 23: 23, 25: 25, 26: 26, 27: 27, 28: 28, 29: 29, 30: 30, 31: 31, 32: 32}
 
 func (a *arenaEncoder) addLegacy(b []byte) (uint32, error) {
 	var node []byte
@@ -43,21 +43,24 @@ func (a *arenaEncoder) addLegacy(b []byte) (uint32, error) {
 				return err
 			}
 		case 14:
+			var err error
+			body, err = a.addPairs(f.bytes)
+			if err != nil {
+				return err
+			}
+		case 32:
 			body = nil
 			if err := parseFields(f.bytes, func(c wireField) error {
-				if c.tag != 1 {
-					return nil
-				}
-				pair := []byte{}
-				err := parseFields(c.bytes, func(p wireField) error {
-					i, err := a.addLegacy(p.bytes)
-					if err == nil {
-						pair = append(pair, fieldVarint(p.tag, uint64(i))...)
+				if c.tag == 3 {
+					attrs, err := a.addPairs(c.bytes)
+					if err != nil {
+						return err
 					}
-					return err
-				})
-				body = append(body, fieldMessage(1, pair)...)
-				return err
+					body = append(body, fieldMessage(3, attrs)...)
+				} else {
+					body = append(body, fieldBytes(c.tag, c.bytes)...)
+				}
+				return nil
 			}); err != nil {
 				return err
 			}
@@ -95,6 +98,28 @@ func (a *arenaEncoder) addLegacy(b []byte) (uint32, error) {
 	i := uint32(len(a.nodes))
 	a.nodes = append(a.nodes, node)
 	return i, nil
+}
+
+func (a *arenaEncoder) addPairs(data []byte) ([]byte, error) {
+	var body []byte
+	err := parseFields(data, func(c wireField) error {
+		if c.tag != 1 {
+			return nil
+		}
+		var pair []byte
+		if err := parseFields(c.bytes, func(p wireField) error {
+			i, err := a.addLegacy(p.bytes)
+			if err == nil {
+				pair = append(pair, fieldVarint(p.tag, uint64(i))...)
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+		body = append(body, fieldMessage(1, pair)...)
+		return nil
+	})
+	return body, err
 }
 func (a *arenaEncoder) encode() []byte {
 	b := fieldVarint(1, uint64(len(a.nodes)))
@@ -340,6 +365,12 @@ func decodeArena(data []byte) ([]Value, error) {
 				}
 				x.Type = ct
 				value = x
+			case 32:
+				module, err := decodeModule(n.bytes, func(b []byte) (Dict, error) { return arenaPairs(b, values) })
+				if err != nil {
+					return err
+				}
+				value = module
 			case 30:
 				value = Cycle{Placeholder: string(n.bytes)}
 			default:

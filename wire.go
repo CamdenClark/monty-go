@@ -205,6 +205,12 @@ func decodeValue(data []byte) (Value, error) {
 				return err
 			}
 			result = z
+		case 32:
+			module, err := decodeModule(f.bytes, decodeDict)
+			if err != nil {
+				return err
+			}
+			result = module
 		case 8:
 			result = string(f.bytes)
 		case 9:

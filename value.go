@@ -290,6 +290,15 @@ func (e *valueEncoder) encode(v reflect.Value, depth int) ([]byte, error) {
 			return nil, fmt.Errorf("Dataclass inputs are no longer supported by Monty protocol v2; use a Dict or Go struct")
 		case Function:
 			return fieldMessage(25, encodeFunction(x)), nil
+		case *ExternalModule, ExternalModule:
+			return nil, fmt.Errorf("an ExternalModule enters the sandbox through CheckoutOptions.ExternalModules")
+		case Module:
+			attrs, err := e.encodeDict(x.Attrs, depth)
+			if err != nil {
+				return nil, err
+			}
+			b := append(fieldString(1, x.Name), fieldMessage(2, fieldBytes(1, x.ID[:]))...)
+			return fieldMessage(32, append(b, fieldMessage(3, decodeBytesField(attrs, 14))...)), nil
 		case InstanceType:
 			return nil, fmt.Errorf("InstanceType cannot be used as an execution input")
 		case *big.Int:

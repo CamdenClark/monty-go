@@ -47,7 +47,7 @@ func TestStructuredRuntimeExceptions(t *testing.T) {
 	want := &monty.JSONErrorData{Message: "bad JSON", Document: &doc, Position: 1, Line: 1, Column: 2}
 	_, err := session.FeedRun(context.Background(), "host_parse()", monty.FeedOptions{ExternalLookup: monty.ExternalLookup{
 		"host_parse": func() error {
-			return &monty.HostError{Type: "json.JSONDecodeError", Message: "bad", Data: want}
+			return &monty.HostError{Type: "json.JSONDecodeError", Message: "bad JSON", Data: want}
 		},
 	}})
 	var runtimeErr *monty.RuntimeError
