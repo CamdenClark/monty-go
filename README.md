@@ -137,7 +137,7 @@ result, err := session.FeedRun(ctx, "from tools import add\nadd(20, 22)")
 
 Attributes are copied at construction; names beginning with `_` are excluded. A nested `*ExternalModule` attribute supplies a submodule such as `tools.sub`. Functions accept the same typed parameters, kwargs and `Async` wrappers as `ExternalLookup`. Optional `.pyi` stubs are supplied before type checking. The sandbox's builtin modules take precedence over host modules.
 
-Module results decode as `Module{Name, ID, Attrs}` and retain their UUID identity. Supply the modules again at checkout when restoring a session or snapshot; callbacks and stubs are host state. `ExternalModuleOptions.ID` can preserve a module's identity across Go processes. For manual drivers, imports and stub requests appear as OS `FunctionSnapshot`s named `import` and `import_stubs`. An `OSHandler` can return a `Module` with explicit `Function` attributes, whose callbacks resolve through `ExternalLookup`, or return a dictionary of module paths to `.pyi` strings for stubs. Missing imports raise `ModuleNotFoundError`.
+Module results decode as `Module{Name, ID, Attrs}` and retain their UUID identity. Supply the modules again at checkout when restoring a session or snapshot so Go callbacks can resolve; already received type-checking stubs survive in the worker dump. `ExternalModuleOptions.ID` can preserve a module's identity across Go processes. For manual drivers, imports and stub requests appear as OS `FunctionSnapshot`s named `import` and `import_stubs`. An `OSHandler` can return a `Module` with explicit `Function` attributes, whose callbacks resolve through `ExternalLookup`, or return a dictionary of module paths to `.pyi` strings for stubs. Missing imports raise `ModuleNotFoundError`.
 
 ## Snapshots
 

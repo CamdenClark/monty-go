@@ -73,6 +73,27 @@ from tools.sub import twice
 	if !errors.As(err, &typing) {
 		t.Fatalf("module stubs not enforced: %v", err)
 	}
+	checkedDump, err := checked.Dump(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore callbacks without resending stubs: the worker retains the ones
+	// received before the dump, including its package's submodule stubs.
+	callbacks, err := monty.NewExternalModule(map[string]any{"add": func(a, b int) int { return a + b }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rechecked := integrationSession(t, pool, monty.CheckoutOptions{TypeCheck: true, ExternalModules: monty.ExternalModules{"tools": callbacks}})
+	if err := rechecked.LoadSession(ctx, checkedDump); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, rechecked, "add(20, 22)"); got != int64(42) {
+		t.Fatal(got)
+	}
+	_, err = rechecked.FeedRun(ctx, "add('bad', 2)")
+	if !errors.As(err, &typing) {
+		t.Fatalf("restored module stubs lost: %v", err)
+	}
 }
 
 func TestImportSnapshotsAndOSHandler(t *testing.T) {

@@ -11,9 +11,10 @@ This release targets [Monty 1.2.0](https://github.com/pydantic/monty/releases/ta
 - Decode `Path.scan` with all optional arguments for directory scans, walks and globs through `FeedOptions.OS`.
 - Preserve structured TOML decode errors as `JSONErrorData`, including messages longer than the document size cap.
 - Retain the stricter destination or snapshot cumulative Go duration budget when restoring state, alongside upstream's restored resource-limit caps.
+- Retry transient Windows lock deletion races during concurrent runtime installation.
 - Add real-worker language, library, import, filesystem and snapshot regression tests. Expand malformed-protocol seeds and add module round-trip, OS-call and real-worker statement fuzzing; CI now provisions the pinned worker for all fourteen fuzz targets.
 
-Monty 1.1.0 snapshots must be restored with the earlier runtime and wrapper; this version requires Monty 1.2.0 snapshots. Host module callbacks and stubs must be supplied again when restoring.
+Monty 1.1.0 snapshots must be restored with the earlier runtime and wrapper; this version requires Monty 1.2.0 snapshots. Host module callbacks must be supplied again when restoring; already received type-checking stubs survive in the worker dump.
 
 ## v0.8.0
 

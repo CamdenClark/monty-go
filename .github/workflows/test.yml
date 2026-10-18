@@ -33,3 +33,6 @@ jobs:
         run: go test -race ./...
       - name: Vet
         run: go vet ./...
+      - name: Stress Windows installer locking
+        if: runner.os == 'Windows'
+        run: go test -race -run '^(TestInstallRuntimeConcurrentCallersDownloadOnce|TestAcquireInstallLockPendingWindowsDeletion)$' -count=10 .

@@ -24,10 +24,11 @@ const RuntimeVersion = "1.2.0"
 const CacheDirEnv = "MONTY_CACHE_DIR"
 
 const (
-	maxRuntimeArchiveSize  = 64 << 20
-	maxRuntimeUnpackedSize = 128 << 20
-	maxRuntimeBinarySize   = 64 << 20
-	installLockStaleAfter  = 5 * time.Minute
+	maxRuntimeArchiveSize      = 64 << 20
+	maxRuntimeUnpackedSize     = 128 << 20
+	maxRuntimeBinarySize       = 64 << 20
+	installLockStaleAfter      = 5 * time.Minute
+	installLockPermissionRetry = time.Second
 )
 
 // InstallOptions configures installation of the Monty worker for the current
@@ -241,6 +242,7 @@ func installRuntime(ctx context.Context, option InstallOptions, artifact runtime
 }
 
 func acquireInstallLock(ctx context.Context, path string) (func(), error) {
+	var permissionRetryUntil time.Time
 	for {
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err == nil {
@@ -250,8 +252,20 @@ func acquireInstallLock(ctx context.Context, path string) (func(), error) {
 				_ = os.Remove(path)
 			}, nil
 		}
-		if !errors.Is(err, os.ErrExist) {
+		if runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission) {
+			// Windows reports ERROR_ACCESS_DENIED for a file pending deletion.
+			// A contender can observe this just as another installer releases
+			// its lock. Bound retries so real permission errors still fail.
+			if permissionRetryUntil.IsZero() {
+				permissionRetryUntil = time.Now().Add(installLockPermissionRetry)
+			}
+			if !time.Now().Before(permissionRetryUntil) {
+				return nil, fmt.Errorf("lock Monty runtime installation: %w", err)
+			}
+		} else if !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("lock Monty runtime installation: %w", err)
+		} else {
+			permissionRetryUntil = time.Time{}
 		}
 		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > installLockStaleAfter {
 			if removeErr := os.Remove(path); removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
