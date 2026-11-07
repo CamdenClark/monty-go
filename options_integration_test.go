@@ -202,3 +202,23 @@ func TestRestoredSleepBudgetKeepsDestinationCeiling(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestRestoredSessionUsesDestinationOSPolicy(t *testing.T) {
+	ctx := context.Background()
+	pool := integrationPool(t)
+	sourceTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	source := integrationSession(t, pool, monty.CheckoutOptions{OSPolicy: monty.OSPolicy{FixedDateTime: &sourceTime}})
+	run(t, source, "from datetime import datetime\nvalue = 42")
+	dump, err := source.Dump(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	destination := integrationSession(t, pool, monty.CheckoutOptions{OSPolicy: monty.OSPolicy{FixedDateTime: &destinationTime}})
+	if err := destination.LoadSession(ctx, dump); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, destination, "(value, datetime.now().isoformat())"); !reflect.DeepEqual(got, monty.Tuple{int64(42), "2030-01-01T00:00:00"}) {
+		t.Fatalf("restored destination policy: %#v", got)
+	}
+}

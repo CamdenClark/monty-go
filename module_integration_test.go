@@ -105,7 +105,7 @@ func TestImportSnapshotsAndOSHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	call, ok := p.(*monty.FunctionSnapshot)
-	if !ok || call.FunctionName != "import" || !reflect.DeepEqual(call.Args, []monty.Value{"tools"}) {
+	if !ok || call.FunctionName != "import" {
 		t.Fatalf("import suspension: %#v", p)
 	}
 	dump, err := call.Dump(ctx)

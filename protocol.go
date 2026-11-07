@@ -117,6 +117,13 @@ func feedRequest(code string, inputs map[string]Value, skip bool, cwd string) (r
 	return request{reqFeed, b}, nil
 }
 
+// ModuleFile answers an import suspension with a module's Python source.
+// It is valid only when the import supplies a non-empty search path.
+type ModuleFile struct {
+	Path   string
+	Source string
+}
+
 type resumeResult struct {
 	value      Value
 	err        *RaisedException
@@ -137,6 +144,9 @@ func encodeResumeResultArena(x resumeResult, a *arenaEncoder) ([]byte, error) {
 	}
 	if x.notHandled {
 		return fieldMessage(5, nil), nil
+	}
+	if file, ok := x.value.(ModuleFile); ok {
+		return fieldMessage(6, append(fieldString(1, file.Path), fieldString(2, file.Source)...)), nil
 	}
 	v, err := a.add(x.value)
 	if err != nil {
@@ -230,6 +240,7 @@ type childEvent struct {
 	maxSuspensions       *uint64
 	maxTotalSleepMicros  *uint64
 	restoredScriptName   *string
+	feedSuspended        *bool
 }
 
 func decodeEvent(data []byte) (childEvent, error) {
@@ -257,6 +268,12 @@ func decodeEvent(data []byte) (childEvent, error) {
 				}
 				v := f.varint
 				e.maxTotalSleepMicros = &v
+			case 29:
+				if f.type_ != protowire.VarintType {
+					return fmt.Errorf("feed suspension state must be a bool")
+				}
+				v := f.varint != 0
+				e.feedSuspended = &v
 			}
 		}
 		return nil
@@ -543,6 +560,7 @@ func decodeOSCall(data []byte) (callEvent, error) {
 			}
 			x.Name = "import"
 			var name string
+			searchPath := List{}
 			if err := parseFields(f.bytes, func(v wireField) error {
 				if v.tag == 1 {
 					if v.type_ != protowire.BytesType {
@@ -550,11 +568,17 @@ func decodeOSCall(data []byte) (callEvent, error) {
 					}
 					name = string(v.bytes)
 				}
+				if v.tag == 2 {
+					if v.type_ != protowire.BytesType {
+						return fmt.Errorf("import search path must be a string")
+					}
+					searchPath = append(searchPath, string(v.bytes))
+				}
 				return nil
 			}); err != nil {
 				return err
 			}
-			x.Args = []Value{name}
+			x.Args = []Value{name, searchPath}
 		case 32:
 			if f.type_ != protowire.BytesType {
 				return fmt.Errorf("import stubs call must be a message")
@@ -622,6 +646,39 @@ func decodeOSCall(data []byte) (callEvent, error) {
 				return err
 			}
 			x.Args = []Value{path, depth, follow, pattern, caseSensitive, recurse}
+		case 34:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("get_type_hints call must be a message")
+			}
+			x.Name = "typing.get_type_hints"
+			var target Value
+			if err := parseFields(f.bytes, func(v wireField) error {
+				if v.tag != 1 && v.tag != 2 {
+					return nil
+				}
+				if target != nil {
+					return fmt.Errorf("get_type_hints has multiple targets")
+				}
+				if v.type_ != protowire.BytesType {
+					return fmt.Errorf("get_type_hints target must be a string or UUID")
+				}
+				if v.tag == 1 {
+					target = string(v.bytes)
+				} else {
+					id, err := decodeUUID(v.bytes)
+					if err != nil {
+						return err
+					}
+					target = id
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if target == nil {
+				return fmt.Errorf("get_type_hints has no target")
+			}
+			x.Args = []Value{target}
 		}
 		return nil
 	})

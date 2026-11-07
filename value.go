@@ -101,6 +101,10 @@ type BuiltinFunction string
 // Path is a virtual POSIX pathlib.Path. It is never a host path.
 type Path string
 
+// Decimal preserves decimal.Decimal's string representation, including scale,
+// signed zero, infinities and NaN payloads. Monty validates text on input.
+type Decimal string
+
 // Function is a marker for a host function supplied through name lookup.
 type Function struct {
 	Name      string
@@ -284,6 +288,8 @@ func (e *valueEncoder) encode(v reflect.Value, depth int) ([]byte, error) {
 			return fieldString(26, string(x)), nil
 		case Path:
 			return fieldString(27, string(x)), nil
+		case Decimal:
+			return fieldString(33, string(x)), nil
 		case FileHandle:
 			return fieldMessage(28, encodeFileHandle(x)), nil
 		case Dataclass:

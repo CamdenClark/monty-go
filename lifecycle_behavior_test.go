@@ -267,3 +267,43 @@ func TestDurationLimitLeavesPoolAvailable(t *testing.T) {
 		t.Fatalf("got %#v", got)
 	}
 }
+
+func TestRejectedImportStubsAnswerCanBeRetried(t *testing.T) {
+	ctx := context.Background()
+	session := integrationSession(t, integrationPool(t), monty.CheckoutOptions{TypeCheck: true})
+	progress, err := session.FeedStart(ctx, "import tools\ntools.VALUE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubs, ok := progress.(*monty.FunctionSnapshot)
+	if !ok || stubs.FunctionName != "import_stubs" {
+		t.Fatalf("expected import stubs suspension, got %#v", progress)
+	}
+	_, err = stubs.Resume(ctx, 42)
+	var runtimeErr *monty.RuntimeError
+	if !errors.As(err, &runtimeErr) {
+		t.Fatalf("invalid stubs answer: %T %v", err, err)
+	}
+	if _, err := session.FeedStart(ctx, "0"); err == nil {
+		t.Fatal("new feed accepted while stubs still awaited an answer")
+	}
+	progress, err = stubs.Resume(ctx, map[string]any{"tools": "VALUE: int"})
+	if err != nil {
+		t.Fatalf("retrying rejected answer: %v", err)
+	}
+	importCall, ok := progress.(*monty.FunctionSnapshot)
+	if !ok || importCall.FunctionName != "import" {
+		t.Fatalf("expected import suspension, got %#v", progress)
+	}
+	progress, err = importCall.Resume(ctx, monty.Module{Name: "tools", ID: [16]byte{1}, Attrs: monty.Dict{{Key: "VALUE", Value: 42}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete, ok := progress.(*monty.Complete)
+	if !ok || complete.Output != int64(42) {
+		t.Fatalf("resumed feed: %#v", progress)
+	}
+	if got := run(t, session, "6 * 7"); got != int64(42) {
+		t.Fatalf("next feed: %#v", got)
+	}
+}

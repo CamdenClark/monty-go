@@ -44,8 +44,11 @@ func FuzzMonty12OSCalls(f *testing.F) {
 		if len(name) > 4096 {
 			t.Skip()
 		}
-		call, err := decodeOSCall(fieldMessage(31, fieldString(1, name)))
-		if err != nil || call.Name != "import" || !reflect.DeepEqual(call.Args, []Value{name}) {
+		searchPath := List{name + "/first", name + "/second"}
+		importBody := append(fieldString(1, name), fieldString(2, searchPath[0].(string))...)
+		importBody = append(importBody, fieldString(2, searchPath[1].(string))...)
+		call, err := decodeOSCall(fieldMessage(31, importBody))
+		if err != nil || call.Name != "import" || !reflect.DeepEqual(call.Args, []Value{name, searchPath}) {
 			t.Fatalf("import: %#v %v", call, err)
 		}
 		stubs := append(fieldString(1, name), fieldString(1, name+"_other")...)

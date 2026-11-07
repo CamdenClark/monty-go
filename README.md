@@ -2,16 +2,16 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library targets **Monty 1.2.0** (subprocess protocol 5) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+The library targets **Monty 1.5.0** (subprocess protocol 7) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
 
-Monty 1.2.0 adds `match`/`case` structural patterns, list slice assignment, set ordering, more user-defined arithmetic and subscript methods, dataclass `field(default=...)`, `default_factory` and `__post_init__`, and the `hashlib`, `os.path`, `bisect`, `csv` and `tomllib` modules. File iteration, newline handling, `json.load`/`json.dump`, and captured groups in `re.split` are also available. See the [upstream Python subset](https://github.com/pydantic/monty/tree/v1.2.0/docs/limitations) for each feature's supported surface.
+Monty 1.5.0 supports `decimal`, `fnmatch`, `annotationlib`, `typing.get_type_hints()`, `json.dumps(default=...)`, timestamp constructors, and imports of host-served Python files. See the [upstream Python subset](https://github.com/pydantic/monty/tree/v1.5.0/docs/limitations) for supported features and limitations.
 
 ## Runtime installation
 
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.9.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.10.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -101,6 +101,8 @@ Callbacks that accept `context.Context` should stop when it is canceled. Pending
 
 Go structs returned by host functions are exposed to Monty as dictionaries. Arbitrary Go host objects and method calls are intentionally not exposed; register explicit host functions for each operation the sandbox may invoke.
 
+Python decimal values cross the boundary as `monty.Decimal`, a string-backed type preserving precision, scale, and special values. Pass `monty.Decimal("1.20")` as an input or callback result; ordinary Go strings remain Python strings. Go callbacks have no Python annotations, so `typing.get_type_hints()` returns an empty dictionary unless an OS handler supplies hints.
+
 Python results can be decoded directly into typed Go values. Dictionaries map
 to structs using `monty` or `json` field tags, with recursive conversion for
 nested structs, pointers, slices, arrays, and maps:
@@ -139,9 +141,13 @@ Attributes are copied at construction; names beginning with `_` are excluded. A 
 
 Module results decode as `Module{Name, ID, Attrs}` and retain their UUID identity. Supply the modules again at checkout when restoring a session or snapshot so Go callbacks can resolve; already received type-checking stubs survive in the worker dump. `ExternalModuleOptions.ID` can preserve a module's identity across Go processes. For manual drivers, imports and stub requests appear as OS `FunctionSnapshot`s named `import` and `import_stubs`. An `OSHandler` can return a `Module` with explicit `Function` attributes, whose callbacks resolve through `ExternalLookup`, or return a dictionary of module paths to `.pyi` strings for stubs. Missing imports raise `ModuleNotFoundError`.
 
+Imports not answered by `ExternalModules` or the `import` OS callback search the worker-provided directories through `OS("Path.read_text", ...)`, trying `name/__init__.py` before `name.py`. Return Python source as a string, or `NotHandled` to skip a candidate. Missing/inaccessible files are skipped; other errors fail the import. Paths passed to this handler are normalized absolute virtual paths; no host files are read automatically. Successfully imported file modules are cached across feeds and snapshots. File imports do not supply type-checking stubs; use `SkipTypeCheck` when necessary.
+
+Manual `import` snapshots expose `[moduleName, searchPath]` in `Args`. Resume with `monty.ModuleFile{Path: "/project/helpers.py", Source: "answer = 42\n"}` to execute a file, or with `Module` for host attributes.
+
 ## Snapshots
 
-`FeedStart` stops at each external call, name lookup, OS call, or unresolved future. Resume manually or call `ResumeAuto` to use `ExternalLookup` and `OS` from the feed options. Snapshots are one-shot and can be serialized before resuming.
+`FeedStart` stops at each external call, name lookup, OS call, or unresolved future. Resume manually or call `ResumeAuto` to use `ExternalLookup` and `OS` from the feed options. Snapshots are one-shot after an accepted answer and can be serialized before resuming. A worker-rejected answer that leaves the feed suspended can be corrected by retrying the same snapshot.
 
 `NameLookupSnapshot.ResumeError` raises a chosen exception at a name lookup. `FeedOptions.Cwd` sets an absolute virtual POSIX working directory before a feed; leaving it empty preserves the session's current directory, initially `/`. This directory is retained by snapshots. Filesystem access still requires explicit OS callbacks.
 
@@ -159,7 +165,7 @@ _ = restored
 
 Suspension snapshots expose `Position` with the source filename and UTF-8 byte offsets (`Start`, `End`, end exclusive).
 
-Use `Session.Dump` and `LoadSession` between feeds to persist an idle REPL. Dumps are opaque Go wrapper snapshots: restore them through this package with the same Monty runtime version.
+Use `Session.Dump` and `LoadSession` between feeds to persist an idle REPL. Dumps are opaque Go wrapper snapshots: restore them through this package with the same Monty runtime version. Monty 1.5.0 applies the destination checkout's `OSPolicy` on restore, not the dump's original policy; configure it explicitly when reproducibility requires the same clocks, randomness, and sleep behavior.
 
 Dumps contain Monty's VM state and the Go wrapper's execution budget, suspension count, and cumulative system-sleep usage. They do not serialize host-side
 `FeedOptions` state such as callback implementations or the Go goroutines and
@@ -238,7 +244,7 @@ go run ./cmd/monty-install
 MONTY_REQUIRE_INTEGRATION=1 go test -race ./...
 ```
 
-The suite includes unit and integration tests, fourteen fuzz targets, and table-driven subtests. REPL tests cover assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors. Monty 1.2 coverage exercises patterns and guards, slice assignment, new standard-library features, importable host modules, file iteration and scanning, and restoration under stricter destination limits. Statement fuzzing runs real Monty programs against an independent Go oracle.
+The suite includes unit and integration tests, fourteen fuzz targets, and table-driven subtests. REPL tests cover assignments, functions, imports, input bindings, overrides, session isolation, multiline execution, unsupported syntax, closures, comprehension scope, global mutation, and state preservation after errors. Upgrade coverage exercises decimal values, file imports and restored module caches, corrected suspension answers, destination OS policies, patterns and guards, slice assignment, importable host modules, file iteration and scanning, and restoration under stricter destination limits. Statement fuzzing runs real Monty programs against an independent Go oracle.
 
 The remaining tests cover installer integrity, caching and concurrency; all boundary value families; native Go object conversion; sync and async host functions; kwargs; host exceptions and panics; lazy lookup; output collectors; errors and recovery; OS callbacks; every snapshot variant; idle/suspended dumps; branched restores; pool capacity and recycling; cancellation; hard timeouts; type checking formats; assertion annotations; and resource limits.
 

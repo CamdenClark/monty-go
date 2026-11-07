@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	protocolVersion = 5
+	protocolVersion = 7
 	maxFrameLen     = 256 << 20
 )
 
@@ -211,6 +211,11 @@ func decodeValue(data []byte) (Value, error) {
 				return err
 			}
 			result = module
+		case 33:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("decimal value must be a string")
+			}
+			result = Decimal(string(f.bytes))
 		case 8:
 			result = string(f.bytes)
 		case 9:

@@ -123,3 +123,27 @@ func TestArenaClassMetadata(t *testing.T) {
 		t.Fatalf("got %#v want %#v", values[3], want)
 	}
 }
+
+func TestDecimalArenaPreservesRepresentation(t *testing.T) {
+	for _, text := range []string{"1.20", "1E+5", "-0.00", "Infinity", "-Infinity", "NaN12", "-sNaN42"} {
+		t.Run(text, func(t *testing.T) {
+			want := Decimal(text)
+			values, err := decodeArena(fieldMessage(2, fieldString(33, text)))
+			if err != nil || len(values) != 1 || values[0] != want {
+				t.Fatalf("decimal output: %#v, %v", values, err)
+			}
+			a := arenaEncoder{}
+			root, err := a.add(Dict{{want, List{want}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			values, err = decodeArena(a.encode())
+			if err != nil || !reflect.DeepEqual(values[root], Dict{{want, List{want}}}) {
+				t.Fatalf("decimal nested round trip: %#v, %v", values, err)
+			}
+		})
+	}
+	if _, err := decodeArena(fieldMessage(2, fieldVarint(33, 1))); err == nil {
+		t.Fatal("decimal with non-string wire type accepted")
+	}
+}

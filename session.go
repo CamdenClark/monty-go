@@ -302,9 +302,16 @@ func (s *Session) FeedRun(ctx context.Context, code string, options ...FeedOptio
 	}
 }
 
+func (r *runState) preservesSuspension(e childEvent) bool {
+	return r.session.pending == r &&
+		(e.kind == eventError || e.kind == eventTypingError) &&
+		(e.feedSuspended == nil || *e.feedSuspended)
+}
+
 func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error) {
 	restoring := r.restoring
-	if e.kind == eventComplete || e.kind >= eventError {
+	preserve := r.preservesSuspension(e)
+	if (e.kind == eventComplete || e.kind >= eventError) && !preserve {
 		r.cancel()
 	}
 	if e.kind >= eventFunctionCall && e.kind <= eventResolveFutures {
@@ -391,13 +398,17 @@ func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error)
 		return &FutureSnapshot{state: r, step: r.step, Position: decodeSourceRange(decodeBytesField(e.body, 2)), PendingCallIDs: decodeUint32List(e.body, 1)}, nil
 	case eventError:
 		x, err := decodeErrorEvent(e.body)
-		r.session.pending = nil
+		if !preserve {
+			r.session.pending = nil
+		}
 		if err != nil {
 			return nil, &ProtocolError{err.Error()}
 		}
 		return nil, classifyRuntime(x)
 	case eventTypingError:
-		r.session.pending = nil
+		if !preserve {
+			r.session.pending = nil
+		}
 		return nil, &TypingError{Diagnostics: decodeStringField(e.body, 1)}
 	case eventFatal:
 		r.session.pending = nil
@@ -407,7 +418,7 @@ func (r *runState) progress(ctx context.Context, e childEvent) (Progress, error)
 	}
 }
 
-func (r *runState) exchange(ctx context.Context, req request, step uint64) (Progress, error) {
+func (r *runState) exchange(ctx context.Context, req request, step uint64, claimed *atomic.Bool) (Progress, error) {
 	s := r.session
 	s.mu.Lock()
 	if s.closed {
@@ -438,7 +449,15 @@ func (r *runState) exchange(ctx context.Context, req request, step uint64) (Prog
 		r.cancel()
 		return nil, err
 	}
-	return r.progress(ctx, e)
+	preserve := r.preservesSuspension(e)
+	p, err := r.progress(ctx, e)
+	if preserve && err != nil {
+		// A rejected answer did not advance the child. Keep the same snapshot
+		// usable so the caller can correct the answer and retry.
+		r.step = step
+		claimed.Store(false)
+	}
+	return p, err
 }
 
 // Resume returns a value from a suspended function call.
@@ -466,7 +485,7 @@ func (s *FunctionSnapshot) resume(ctx context.Context, result resumeResult) (Pro
 			return nil, err
 		}
 	}
-	return s.state.exchange(ctx, req, s.step)
+	return s.state.exchange(ctx, req, s.step, &s.used)
 }
 
 // ResumeError raises a chosen Python exception at a suspended call.
@@ -548,7 +567,7 @@ func (s *FunctionSnapshot) resumeEager(ctx context.Context, value Value, outcome
 			return nil, err
 		}
 	}
-	return s.state.exchange(ctx, req, s.step)
+	return s.state.exchange(ctx, req, s.step, &s.used)
 }
 
 func (s *FunctionSnapshot) resumeAsync(ctx context.Context, run func() (Value, error), cancel context.CancelFunc) (Progress, error) {
@@ -613,6 +632,9 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		}
 		handler := s.state.options.OS
 		if handler == nil {
+			if s.FunctionName == "typing.get_type_hints" {
+				return s.resume(ctx, resumeResult{value: Dict{}})
+			}
 			return s.resume(ctx, resumeResult{notHandled: true})
 		}
 		callbackCtx, cancel := s.state.callbackContext(ctx)
@@ -621,7 +643,16 @@ func (s *FunctionSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 		if err != nil {
 			return s.resumeError(ctx, err)
 		}
+		if _, ok := value.(notHandled); ok && s.FunctionName == "import" {
+			value, err = importFile(callbackCtx, handler, s.Args[0].(string), s.Args[1].(List))
+			if err != nil {
+				return s.resumeError(ctx, err)
+			}
+		}
 		if _, ok := value.(notHandled); ok {
+			if s.FunctionName == "typing.get_type_hints" {
+				return s.resume(ctx, resumeResult{value: Dict{}})
+			}
 			return s.resume(ctx, resumeResult{notHandled: true})
 		}
 		return s.resume(ctx, resumeResult{value: value})
@@ -668,7 +699,7 @@ func (s *NameLookupSnapshot) resume(ctx context.Context, value Value) (Progress,
 	if err != nil {
 		return nil, err
 	}
-	return s.state.exchange(ctx, req, s.step)
+	return s.state.exchange(ctx, req, s.step, &s.used)
 }
 
 // ResumeUndefined answers an unresolved name with Python NameError.
@@ -676,7 +707,7 @@ func (s *NameLookupSnapshot) ResumeUndefined(ctx context.Context) (Progress, err
 	if err := s.claim(); err != nil {
 		return nil, err
 	}
-	return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step)
+	return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step, &s.used)
 }
 
 // ResumeError raises an exception at a name lookup instead of resolving it.
@@ -684,18 +715,18 @@ func (s *NameLookupSnapshot) ResumeError(ctx context.Context, err error) (Progre
 	if claimErr := s.claim(); claimErr != nil {
 		return nil, claimErr
 	}
-	return s.state.exchange(ctx, request{reqResumeName, fieldMessage(4, encodeRaised(raisedFromError(err)))}, s.step)
+	return s.state.exchange(ctx, request{reqResumeName, fieldMessage(4, encodeRaised(raisedFromError(err)))}, s.step, &s.used)
 }
 func (s *NameLookupSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err := s.claim(); err != nil {
 		return nil, err
 	}
 	if s.ObjectID != nil {
-		return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step)
+		return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step, &s.used)
 	}
 	value, ok := s.state.options.ExternalLookup[s.Name]
 	if !ok {
-		return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step)
+		return s.state.exchange(ctx, resumeNameUndefinedRequest(), s.step, &s.used)
 	}
 	if isHostFunction(value) {
 		doc := functionDoc(value)
@@ -763,7 +794,7 @@ func (s *FutureSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.state.exchange(ctx, req, s.step)
+	return s.state.exchange(ctx, req, s.step, &s.used)
 }
 
 // Resume resolves selected pending futures manually. A result that implements
@@ -785,7 +816,7 @@ func (s *FutureSnapshot) Resume(ctx context.Context, results map[uint32]Value) (
 	if err != nil {
 		return nil, err
 	}
-	return s.state.exchange(ctx, req, s.step)
+	return s.state.exchange(ctx, req, s.step, &s.used)
 }
 
 func snapshotDump(ctx context.Context, state *runState, step uint64) ([]byte, error) {

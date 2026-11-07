@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.0
+
+This release targets [Monty 1.5.0](https://github.com/pydantic/monty/releases/tag/v1.5.0) and subprocess protocol 7.
+
+- Pin and verify the Monty 1.5.0 runtime archives and executables for all five supported platforms.
+- Encode and decode lossless string-backed `Decimal` values, including nested values and special forms.
+- Support Python file imports through `FeedOptions.OS`, with package-first searches, normalized virtual paths, bounded search directories, and cached modules that survive snapshots. Manual drivers can inspect import search paths and resume with `ModuleFile`.
+- Handle host `typing.get_type_hints` requests; Go callbacks default to an empty annotations dictionary.
+- Preserve suspended feeds after worker-rejected answers so manual drivers can correct and retry the same snapshot.
+- Expose the latest upstream language and standard-library improvements, including `decimal`, `fnmatch`, `annotationlib`, JSON default callbacks, and timestamp constructors.
+- Verify decimal boundaries, file imports, restored caches, resume retries, and destination OS policies with protocol and real-worker regressions.
+
+Snapshots from earlier Monty versions require their original runtime and wrapper. Monty 1.5.0 restores the destination checkout's `OSPolicy`, rather than the dump's policy; configure the destination explicitly to preserve deterministic clock, random, and sleep behavior.
+
 ## v0.9.0
 
 This release targets [Monty 1.2.0](https://github.com/pydantic/monty/releases/tag/v1.2.0) and subprocess protocol 5.
