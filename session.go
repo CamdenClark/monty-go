@@ -730,7 +730,8 @@ func (s *NameLookupSnapshot) ResumeAuto(ctx context.Context) (Progress, error) {
 	}
 	if isHostFunction(value) {
 		doc := functionDoc(value)
-		return s.resume(ctx, Function{Name: s.Name, Docstring: doc})
+		_, async := value.(AsyncFunction)
+		return s.resume(ctx, Function{Name: s.Name, Docstring: doc, IsAsync: async})
 	}
 	return s.resume(ctx, value)
 }

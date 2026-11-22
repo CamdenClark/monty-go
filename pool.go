@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the version of this Go wrapper.
-const Version = "0.10.0"
+const Version = "0.11.0"
 
 // Options configures a Monty worker pool.
 type Options struct {
@@ -662,6 +662,8 @@ func eventErrorValue(e childEvent) error {
 		return &TypingError{Diagnostics: decodeStringField(e.body, 1)}
 	case eventFatal:
 		return &ProtocolError{Message: decodeStringField(e.body, 1)}
+	case eventSessionRefused:
+		return fmt.Errorf("Monty session refused: %s", decodeStringField(e.body, 1))
 	default:
 		return &ProtocolError{Message: fmt.Sprintf("unexpected event kind %d", e.kind)}
 	}

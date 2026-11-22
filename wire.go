@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	protocolVersion = 7
+	protocolVersion = 8
 	maxFrameLen     = 256 << 20
 )
 
@@ -489,6 +489,9 @@ func decodeFunction(data []byte) Function {
 		if f.tag == 2 {
 			v := string(f.bytes)
 			x.Docstring = &v
+		}
+		if f.tag == 3 {
+			x.IsAsync = f.varint != 0
 		}
 		return nil
 	})

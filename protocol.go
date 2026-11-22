@@ -231,6 +231,7 @@ const (
 	eventOK             eventKind = 10
 	eventFatal          eventKind = 11
 	eventShutdownDump   eventKind = 12
+	eventSessionRefused eventKind = 14
 )
 
 type childEvent struct {
@@ -246,7 +247,7 @@ type childEvent struct {
 func decodeEvent(data []byte) (childEvent, error) {
 	var e childEvent
 	err := parseFields(data, func(f wireField) error {
-		if f.tag >= 1 && f.tag <= 12 {
+		if f.tag >= 1 && f.tag <= 12 || f.tag == int(eventSessionRefused) {
 			if e.kind != 0 {
 				return fmt.Errorf("child event has multiple kinds")
 			}
@@ -679,6 +680,45 @@ func decodeOSCall(data []byte) (callEvent, error) {
 				return fmt.Errorf("get_type_hints has no target")
 			}
 			x.Args = []Value{target}
+		case 35:
+			if f.type_ != protowire.BytesType {
+				return fmt.Errorf("exclusive create call must be a message")
+			}
+			var path, mode string
+			var permissions uint32
+			if err := parseFields(f.bytes, func(v wireField) error {
+				switch v.tag {
+				case 1, 2:
+					if v.type_ != protowire.BytesType {
+						return fmt.Errorf("exclusive create path/mode must be a string")
+					}
+					if v.tag == 1 {
+						path = string(v.bytes)
+					} else {
+						mode = string(v.bytes)
+					}
+				case 3:
+					if v.type_ != protowire.VarintType {
+						return fmt.Errorf("exclusive create permissions must be a varint")
+					}
+					if v.varint > 0o777 || v.varint&0o111 != 0 {
+						return fmt.Errorf("exclusive create permissions must contain only read/write access bits")
+					}
+					permissions = uint32(v.varint)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			canonical, err := CanonicalFileMode(mode)
+			if err != nil {
+				return err
+			}
+			if canonical[len(canonical)-1] == '+' {
+				return fmt.Errorf("exclusive create does not support update modes")
+			}
+			x.Name = "Path.create_exclusive"
+			x.Args = []Value{path, canonical, permissions}
 		}
 		return nil
 	})

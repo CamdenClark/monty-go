@@ -6,7 +6,7 @@ import (
 )
 
 func TestArenaRoundTrip(t *testing.T) {
-	values := []Value{Dict{{"items", Tuple{int64(42), "a", nil}}, {"time", Time{Hour: 12, Minute: 30}}}, NamedTuple{TypeName: "Point", FieldNames: []string{"x"}, Values: []Value{int64(1)}}}
+	values := []Value{Dict{{"items", Tuple{int64(42), "a", nil}}, {"time", Time{Hour: 12, Minute: 30}}}, NamedTuple{TypeName: "Point", FieldNames: []string{"x"}, Values: []Value{int64(1)}}, Function{Name: "host_async", IsAsync: true}}
 	a := arenaEncoder{}
 	var roots []uint32
 	for _, v := range values {

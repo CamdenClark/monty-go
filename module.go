@@ -132,7 +132,8 @@ func (m *ExternalModule) value(name string, depth int) (Module, error) {
 				return Module{}, err
 			}
 		} else if isHostFunction(value) {
-			value = Function{Name: name + "." + key, Docstring: functionDoc(value)}
+			_, async := value.(AsyncFunction)
+			value = Function{Name: name + "." + key, Docstring: functionDoc(value), IsAsync: async}
 		}
 		attrs = append(attrs, Pair{key, value})
 	}

@@ -109,6 +109,8 @@ type Decimal string
 type Function struct {
 	Name      string
 	Docstring *string
+	// IsAsync reports whether the host function is asynchronous.
+	IsAsync bool
 }
 
 // FileHandle is host-side metadata for a sandbox file. It never contains a
@@ -532,5 +534,6 @@ func encodeFunction(x Function) []byte {
 	if x.Docstring != nil {
 		b = append(b, fieldString(2, *x.Docstring)...)
 	}
+	b = append(b, fieldBool(3, x.IsAsync)...)
 	return b
 }

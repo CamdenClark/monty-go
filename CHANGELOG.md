@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.11.0
+
+This release targets [Monty 1.6.0](https://github.com/pydantic/monty/releases/tag/v1.6.0) and subprocess protocol 8.
+
+- Pin and verify Monty 1.6.0 runtime archives and executables for all five supported platforms.
+- Preserve asynchronous function metadata across values, lazy lookups, and external modules while retaining the existing request/response async driver.
+- Decode exclusive-file creation requests as `Path.create_exclusive`, preserving canonical modes and explicit permissions, including zero. Reject unsafe permissions, update modes, and malformed requests. Hosts must implement creation atomically; upstream Python `open(..., "x")` remains unsupported.
+- Surface worker session-refusal diagnostics rather than misclassifying them as crashes.
+- Adopt upstream arithmetic, scope-analysis, sequence-search, filesystem-error, and compact-snapshot improvements.
+- Add protocol regressions for asynchronous function identity, exclusive creation, and refusal diagnostics; verify existing async, filesystem, and snapshot behavior against the new worker.
+
+Snapshots from Monty 1.5.0 require the earlier runtime and wrapper; use Monty 1.6.0 snapshots with this version. Configure pipelining and the upstream streamed async-call opt-in remain disabled.
+
 ## v0.10.0
 
 This release targets [Monty 1.5.0](https://github.com/pydantic/monty/releases/tag/v1.5.0) and subprocess protocol 7.

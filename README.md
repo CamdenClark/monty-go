@@ -2,16 +2,16 @@
 
 An idiomatic Go client for [Pydantic Monty](https://github.com/pydantic/monty), the sandboxed Python interpreter written in Rust. It drives the same versioned subprocess protocol as the official TypeScript wrapper, so interpreter crashes and hard timeouts kill a worker rather than the Go process.
 
-The library targets **Monty 1.5.0** (subprocess protocol 7) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
+The library targets **Monty 1.6.0** (subprocess protocol 8) and requires Go 1.25+. Its installer downloads only the current platform's pinned Monty worker; the Go module itself contains no native executables.
 
-Monty 1.5.0 supports `decimal`, `fnmatch`, `annotationlib`, `typing.get_type_hints()`, `json.dumps(default=...)`, timestamp constructors, and imports of host-served Python files. See the [upstream Python subset](https://github.com/pydantic/monty/tree/v1.5.0/docs/limitations) for supported features and limitations.
+Monty 1.6.0 improves arithmetic, nested-function analysis, sequence searches, filesystem errors, and snapshot encoding. It retains `decimal`, `fnmatch`, `annotationlib`, `typing.get_type_hints()`, JSON default callbacks, timestamp constructors, and imports of host-served Python files. See the [upstream Python subset](https://github.com/pydantic/monty/tree/v1.6.0/docs/limitations) for supported features and limitations.
 
 ## Runtime installation
 
 Install the runtime explicitly during development, CI, or container construction:
 
 ```bash
-go run github.com/camdenclark/monty-go/cmd/monty-install@v0.10.0
+go run github.com/camdenclark/monty-go/cmd/monty-install@v0.11.0
 ```
 
 Applications can perform the same idempotent installation themselves:
@@ -234,6 +234,10 @@ security boundary and validate it independently. Audited mount support is
 tracked separately in [issue #1](https://github.com/CamdenClark/monty-go/issues/1).
 
 `os.scandir`, `os.walk`, `Path.walk`, `Path.glob` and `Path.rglob` use the `Path.scan` OS call. Its arguments are `[path, maxDepth, followSymlinks, pattern, caseSensitive, recurseSymlinks]`: `maxDepth` is `nil` or `uint32`, `pattern` is a `List` of glob parts, and `caseSensitive` is `nil` or `bool`. Preserve the difference between absent options and explicit zero/false. Return a `List` of `Tuple{relativePath, isDir, isFile, isSymlink}` entries, including the root as `""`. Globs also accept `Dict{{Key: "matches", Value: List{...}}}` with preselected relative paths. All paths are virtual POSIX paths.
+
+Protocol 8 also defines `Path.create_exclusive` with arguments `[path, mode, permissions]`, where `mode` is a canonical file mode string and `permissions` is a `uint32` containing access bits only (zero is valid). A handler must atomically create a new file, reject every existing entry including symlinks, and return `FileHandle{Path: path, Mode: mode, Position: 0}`. Do not implement this as an existence check followed by a write; return `NotHandled` if atomic creation is unavailable. This protocol capability does not enable Python `open(..., "x")`, which Monty 1.6.0 still rejects.
+
+Host function values preserve the protocol's `Function.IsAsync` metadata; `Async` callbacks and external modules set it automatically. The Go driver retains request/response suspension handling; upstream's opt-in streamed async-call transport is not enabled.
 
 ## Testing
 

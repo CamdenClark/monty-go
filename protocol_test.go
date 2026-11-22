@@ -3,6 +3,7 @@ package monty
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -96,3 +97,57 @@ func TestErrorEventPreservesOutstandingSuspension(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+func TestExclusiveCreatePreservesAccessPermissions(t *testing.T) {
+	for _, permissions := range []uint32{0, 0o600, 0o666} {
+		body := append(fieldString(1, "/new"), fieldString(2, "br")...)
+		body = append(body, fieldVarint(3, uint64(permissions))...)
+		call, err := decodeOSCall(fieldMessage(35, body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if call.Name != "Path.create_exclusive" || !reflect.DeepEqual(call.Args, []Value{"/new", "rb", permissions}) {
+			t.Fatalf("exclusive creation arguments: %#v", call)
+		}
+	}
+}
+
+func TestExclusiveCreateRejectsUnsafeArguments(t *testing.T) {
+	for name, extra := range map[string][]byte{
+		"execute permission": fieldVarint(3, 0o700),
+		"non-access bits":    fieldVarint(3, 0o1000),
+		"overflow":           fieldVarint(3, 1<<32),
+		"wrong permissions":  fieldString(3, "600"),
+		"wrong path":         fieldVarint(1, 1),
+		"wrong mode":         fieldVarint(2, 1),
+		"update mode":        fieldString(2, "w+"),
+		"exclusive mode":     fieldString(2, "x"),
+		"truncated payload":  {0x80},
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := append(fieldString(1, "/new"), fieldString(2, "w")...)
+			payload = append(payload, extra...)
+			if _, err := decodeOSCall(fieldMessage(35, payload)); err == nil {
+				t.Fatal("unsafe exclusive creation accepted")
+			}
+		})
+	}
+	if _, err := decodeOSCall(fieldVarint(35, 1)); err == nil {
+		t.Fatal("non-message exclusive creation accepted")
+	}
+}
+
+func TestSessionRefusalPreservesDiagnostic(t *testing.T) {
+	message := "invalid type_check_stubs: Source is too deeply nested"
+	event, err := decodeEvent(fieldMessage(14, fieldString(1, message)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eventErrorValue(event); err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("configuration refusal lost diagnostic: %v", err)
+	}
+	wire := append(fieldMessage(14, fieldString(1, message)), fieldMessage(10, nil)...)
+	if _, err := decodeEvent(wire); err == nil {
+		t.Fatal("refusal with a second event kind accepted")
+	}
+}
